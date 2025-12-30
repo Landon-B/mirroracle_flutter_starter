@@ -3,13 +3,12 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 
+import '../services/mic_service.dart'; // <-- adjust path if needed
 import 'session_summary_page.dart';
 import 'new_session/session_camera_preview.dart';
 import 'new_session/session_overlay.dart';
@@ -51,9 +50,15 @@ class _NewSessionPageState extends State<NewSessionPage>
   final SessionSpeechMatcher _speechMatcher = SessionSpeechMatcher();
   Timer? _affTimer;
 
-  // Speech
-  final stt.SpeechToText _stt = stt.SpeechToText();
-  bool _sttReady = false;
+  // Mic (production service)
+  final MicService _mic = MicService();
+  StreamSubscription<String>? _micPartialSub;
+  StreamSubscription<String>? _micFinalSub;
+  StreamSubscription<Object>? _micErrSub;
+  StreamSubscription<MicState>? _micStateSub;
+  StreamSubscription<double>? _micLevelSub; // optional (overlay doesn't use it yet)
+
+  bool _micReady = false;
   bool _micNeedsRestart = false;
   bool _listenTimedOut = false;
   Timer? _listenTimeoutTimer;
@@ -71,23 +76,16 @@ class _NewSessionPageState extends State<NewSessionPage>
         ? widget.initialAffirmations
         : const ['I am present.', 'I am capable.', 'I finish what I start.'];
 
-    _prepareSpeech();
+    _attachMicStreams();
+    _prepareMic();
+
     _prepareCamera().then((_) {
       if (!mounted) return;
       _startLive();
     });
   }
 
-  // ---------------- Camera ----------------
-
-  Future<bool> _isEmulator() async {
-    try {
-      final info = await DeviceInfoPlugin().deviceInfo;
-      if (info is IosDeviceInfo) return info.isPhysicalDevice == false;
-      if (info is AndroidDeviceInfo) return info.isPhysicalDevice == false;
-    } catch (_) {}
-    return false;
-  }
+  // ---------------- Camera (production-ready) ----------------
 
   Future<void> _prepareCamera() async {
     try {
@@ -98,16 +96,14 @@ class _NewSessionPageState extends State<NewSessionPage>
         orElse: () => _cameras.first,
       );
 
-      final onEmulator = await _isEmulator();
-      final List<ResolutionPreset> desiredPresets = onEmulator
-          ? const [ResolutionPreset.low, ResolutionPreset.medium]
-          : const [
-              ResolutionPreset.max,
-              ResolutionPreset.ultraHigh,
-              ResolutionPreset.veryHigh,
-              ResolutionPreset.high,
-              ResolutionPreset.medium,
-            ];
+      // Production approach: try highest quality first, fall back cleanly
+      const desiredPresets = <ResolutionPreset>[
+        ResolutionPreset.max,
+        ResolutionPreset.ultraHigh,
+        ResolutionPreset.veryHigh,
+        ResolutionPreset.high,
+        ResolutionPreset.medium,
+      ];
 
       CameraController? controller;
       Future<void>? init;
@@ -115,7 +111,7 @@ class _NewSessionPageState extends State<NewSessionPage>
 
       for (final preset in desiredPresets) {
         try {
-          controller?.dispose();
+          await controller?.dispose();
           controller = CameraController(
             cam,
             preset,
@@ -126,6 +122,7 @@ class _NewSessionPageState extends State<NewSessionPage>
           );
           init = controller.initialize();
           await init;
+
           _controller = controller;
           _initCam = init;
           lastErr = null;
@@ -139,13 +136,16 @@ class _NewSessionPageState extends State<NewSessionPage>
         throw lastErr;
       }
 
+      // Gentle auto setup; never crash the session if unsupported on device
       try {
         await _controller!.setExposureMode(ExposureMode.auto);
         await _controller!.setFocusMode(FocusMode.auto);
+
         final minZoom = await _controller!.getMinZoomLevel();
         final maxZoom = await _controller!.getMaxZoomLevel();
         final targetZoom = (minZoom + 0.35).clamp(minZoom, maxZoom);
         await _controller!.setZoomLevel(targetZoom);
+
         try {
           await Future.delayed(const Duration(milliseconds: 300));
           await _controller!.setFocusMode(FocusMode.locked);
@@ -160,8 +160,6 @@ class _NewSessionPageState extends State<NewSessionPage>
 
   // ---------------- Countdown -> Live -> Finish ----------------
 
-  // Countdown is handled in onboarding; mirror session starts immediately.
-
   void _startLive() async {
     setState(() {
       _phase = SessionPhase.live;
@@ -172,12 +170,14 @@ class _NewSessionPageState extends State<NewSessionPage>
       _currentAffRep = 0;
       _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
       _micNeedsRestart = false;
+      _listenTimedOut = false;
     });
+
     WakelockPlus.enable();
 
-    await _prepareSpeech();
-    if (_sttReady) {
-      _listen();
+    await _prepareMic();
+    if (_micReady) {
+      _listen(); // starts mic service listening
     } else if (mounted) {
       setState(() => _micNeedsRestart = true);
     }
@@ -203,6 +203,7 @@ class _NewSessionPageState extends State<NewSessionPage>
     WakelockPlus.disable();
 
     setState(() => _phase = SessionPhase.saving);
+
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) throw Exception('No user session');
@@ -274,6 +275,7 @@ class _NewSessionPageState extends State<NewSessionPage>
 
   void _advanceAffirmation() {
     if (_affirmations.isEmpty) return;
+
     if (_currentAffRep < kRepsPerAffirmation - 1) {
       setState(() {
         _currentAffRep += 1;
@@ -297,54 +299,95 @@ class _NewSessionPageState extends State<NewSessionPage>
     _restartSpeechForNewAffirmation();
   }
 
-  // ---------------- Speech: init, listen, align, highlight ----------------
+  // ---------------- Mic: init, listen, align, highlight ----------------
 
-  Future<void> _prepareSpeech() async {
-    if (_sttReady) return;
+  void _attachMicStreams() {
+    // Partial stream updates per-word highlight smoothly (dedupe/throttle happens in MicService)
+    _micPartialSub = _mic.partialText$.listen((txt) {
+      if (!mounted || _phase != SessionPhase.live) return;
+      final spokenTokens = _speechMatcher.tokenizeSpeech(txt);
+      final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
+      if (changed) setState(() {});
+    });
+
+    // Final stream: only advance when the line is complete
+    _micFinalSub = _mic.finalText$.listen((txt) {
+      if (!mounted || _phase != SessionPhase.live) return;
+      final spokenTokens = _speechMatcher.tokenizeSpeech(txt);
+      final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
+      if (changed) setState(() {});
+      if (_speechMatcher.isComplete) {
+        _advanceAffirmation();
+      }
+    });
+
+    // Optional: keep this for future mic UI (overlay currently doesn’t use it)
+    _micLevelSub = _mic.soundLevel$.listen((_) {});
+
+    // State changes
+    _micStateSub = _mic.state$.listen((s) {
+      if (!mounted) return;
+      // If we’re live and the mic returns to ready unexpectedly, try to resume.
+      if (_phase == SessionPhase.live &&
+          s == MicState.ready &&
+          !_listenTimedOut &&
+          !_micNeedsRestart) {
+        _restartSpeechSoon();
+      }
+    });
+
+    // Errors -> decide whether to pause or auto-restart
+    _micErrSub = _mic.errors$.listen((err) {
+      if (!mounted) return;
+
+      final msg = err.toString().toLowerCase();
+      final isTimeout = msg.contains('timeout') || msg.contains('no match');
+
+      final isHardFailure = msg.contains('permission') ||
+          msg.contains('denied') ||
+          msg.contains('not available') ||
+          msg.contains('busy') ||
+          msg.contains('engine');
+
+      if (_phase == SessionPhase.live) {
+        if (!isTimeout && isHardFailure) {
+          setState(() {
+            _listenTimedOut = true;
+            _micNeedsRestart = true;
+          });
+          _stopSpeech();
+        } else {
+          _restartSpeechSoon();
+        }
+      }
+    });
+  }
+
+  Future<void> _prepareMic() async {
+    if (_micReady) return;
     try {
-      _sttReady = await _stt.initialize(
-        onStatus: (status) {
-          if ((status == 'notListening' || status == 'done') &&
-              _phase == SessionPhase.live) {
-            if (!mounted) return;
-            if (_listenTimedOut) return;
-            _restartSpeechSoon();
-          }
-        },
-        onError: (error) {
-          if (!mounted) return;
-          final msg = error.errorMsg.toLowerCase();
-          final isTimeout = msg.contains('timeout') || msg.contains('no match');
-          final isHardFailure = msg.contains('permission') ||
-              msg.contains('denied') ||
-              msg.contains('not available') ||
-              msg.contains('busy') ||
-              msg.contains('engine');
-          if (error.permanent && !isTimeout && isHardFailure) {
-            setState(() {
-              _listenTimedOut = true;
-              _micNeedsRestart = true;
-            });
-          } else {
-            _restartSpeechSoon();
-          }
-        },
-      );
-
-      if (!_sttReady) return;
+      _micReady = await _mic.init(debugLogging: false);
+      if (!mounted) return;
+      if (!_micReady && _phase == SessionPhase.live) {
+        setState(() => _micNeedsRestart = true);
+      }
     } catch (_) {
       // Mic failures shouldn't break the session
+      if (!mounted) return;
+      if (_phase == SessionPhase.live) setState(() => _micNeedsRestart = true);
     }
   }
 
   void _listen() {
-    if (!_sttReady) return;
+    if (!_micReady || _phase != SessionPhase.live) return;
 
     _listenTimeoutTimer?.cancel();
     setState(() {
       _listenTimedOut = false;
       _micNeedsRestart = false;
     });
+
+    // Session-level timeout protection
     _listenTimeoutTimer = Timer(const Duration(minutes: 10), () {
       if (!mounted || _phase != SessionPhase.live) return;
       setState(() {
@@ -353,46 +396,30 @@ class _NewSessionPageState extends State<NewSessionPage>
       });
       _stopSpeech();
     });
-    _stt.listen(
-      onResult: (result) {
-        final spokenTokens =
-            _speechMatcher.tokenizeSpeech(result.recognizedWords);
-        final isFinal = result.finalResult;
-        final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
-        if (changed && mounted) {
-          setState(() {});
-        }
 
-        // If user said the whole line and engine gives a final result,
-        // advance to the next affirmation.
-        if (_speechMatcher.isComplete && isFinal) {
-          _advanceAffirmation();
-        }
-      },
+    _mic.start(
+      // Keep dictation/partials for smoother word matching
       listenMode: stt.ListenMode.dictation,
       partialResults: true,
-      cancelOnError: false,
       listenFor: const Duration(minutes: 10),
       pauseFor: const Duration(seconds: 1),
-      localeId: null, // device default
+      localeId: null, // device default unless you pass one
     );
   }
 
   void _restartSpeechSoon() {
     Future.delayed(const Duration(milliseconds: 200), () {
       if (!mounted || _phase != SessionPhase.live) return;
-      if (!_stt.isListening && !_micNeedsRestart) {
+      if (_mic.state != MicState.listening && !_micNeedsRestart) {
         _listen();
       }
     });
   }
 
   Future<void> _restartSpeechForNewAffirmation() async {
-    if (!_sttReady) return;
+    if (!_micReady) return;
     try {
-      if (_stt.isListening) {
-        await _stt.stop();
-      }
+      await _mic.stop();
     } catch (_) {}
     if (_phase == SessionPhase.live) {
       _listen(); // restart to reset listenFor timer per affirmation
@@ -402,11 +429,11 @@ class _NewSessionPageState extends State<NewSessionPage>
   Future<void> _stopSpeech() async {
     try {
       _listenTimeoutTimer?.cancel();
-      if (_stt.isListening) {
-        await _stt.stop();
-      }
+      await _mic.stop();
     } catch (_) {}
   }
+
+  // ---------------- Helpers ----------------
 
   String _formatLocalDate(DateTime dt) {
     final y = dt.year.toString().padLeft(4, '0');
@@ -426,12 +453,13 @@ class _NewSessionPageState extends State<NewSessionPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final c = _controller;
     if (c == null || !c.value.isInitialized) return;
+
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       c.pausePreview();
       _stopSpeech();
     } else if (state == AppLifecycleState.resumed) {
       c.resumePreview();
-      if (_phase == SessionPhase.live && !_stt.isListening) {
+      if (_phase == SessionPhase.live && _mic.state != MicState.listening) {
         _listen();
       }
     }
@@ -440,12 +468,23 @@ class _NewSessionPageState extends State<NewSessionPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+
     _ticker?.cancel();
     _affTimer?.cancel();
     _listenTimeoutTimer?.cancel();
+
+    _micPartialSub?.cancel();
+    _micFinalSub?.cancel();
+    _micErrSub?.cancel();
+    _micStateSub?.cancel();
+    _micLevelSub?.cancel();
+
     _stopSpeech();
+    _mic.dispose();
+
     WakelockPlus.disable();
     _controller?.dispose();
+
     super.dispose();
   }
 
