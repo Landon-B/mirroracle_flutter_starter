@@ -1,66 +1,189 @@
-class _MicService {
-  final _stt = stt.SpeechToText();
+import 'dart:async';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+enum MicState { idle, initializing, ready, listening, stopping, disposed }
+
+class MicService {
+  final stt.SpeechToText _stt = stt.SpeechToText();
+
   final _partialCtrl = StreamController<String>.broadcast();
+  final _finalCtrl = StreamController<String>.broadcast();
   final _levelCtrl = StreamController<double>.broadcast();
+  final _errorCtrl = StreamController<Object>.broadcast();
+  final _stateCtrl = StreamController<MicState>.broadcast();
 
   Stream<String> get partialText$ => _partialCtrl.stream;
-  Stream<double> get soundLevel$ => _levelCtrl.stream;
+  Stream<String> get finalText$ => _finalCtrl.stream;
+  Stream<double> get soundLevel$ => _levelCtrl.stream; // 0..1 (smoothed)
+  Stream<Object> get errors$ => _errorCtrl.stream;
+  Stream<MicState> get state$ => _stateCtrl.stream;
+
+  MicState _state = MicState.idle;
+  MicState get state => _state;
 
   bool _available = false;
+  bool _disposed = false;
+
   String? _localeId;
 
-  Future<bool> init() async {
+  // partial throttling/dedupe
+  String _lastPartial = '';
+  DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
+  Duration partialEmitEvery = const Duration(milliseconds: 100);
+
+  // sound level smoothing (EMA)
+  double _smoothedLevel = 0.0;
+  double levelSmoothing = 0.25; // 0..1 (higher = more reactive)
+
+  bool get isAvailable => _available;
+  bool get isListening => _stt.isListening;
+
+  void _setState(MicState s) {
+    _state = s;
+    if (!_stateCtrl.isClosed) _stateCtrl.add(s);
+  }
+
+  Future<bool> init({bool debugLogging = false, String? localeId}) async {
+    if (_disposed) return false;
+    if (_state == MicState.listening) return _available;
+
+    _setState(MicState.initializing);
     try {
       _available = await _stt.initialize(
-        debugLogging: false,
-        onStatus: (s) {
-          // debugPrint('[stt] status=$s'); // uncomment if needed
-        },
+        debugLogging: debugLogging,
         onError: (e) {
-          // debugPrint('[stt] error=$e'); // uncomment if needed
+          if (!_errorCtrl.isClosed) _errorCtrl.add(e);
         },
       );
+
       if (_available) {
-        final sys = await _stt.systemLocale();
-        _localeId = sys?.localeId;
+        if (localeId != null) {
+          _localeId = localeId;
+        } else {
+          final sys = await _stt.systemLocale();
+          _localeId = sys?.localeId;
+        }
+        _setState(MicState.ready);
+      } else {
+        _setState(MicState.idle);
       }
       return _available;
-    } catch (_) {
+    } catch (e) {
+      if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+      _setState(MicState.idle);
       return false;
     }
   }
 
-  Future<void> start() async {
+  Future<void> start({
+    stt.ListenMode listenMode = stt.ListenMode.dictation,
+    bool partialResults = true,
+    Duration listenFor = const Duration(minutes: 10),
+    Duration pauseFor = const Duration(seconds: 2),
+    String? localeId,
+    bool cancelOnError = false,
+  }) async {
+    if (_disposed) return;
     if (!_available) return;
+    if (_state == MicState.listening) return;
+
+    _setState(MicState.listening);
+
+    _lastPartial = '';
+    _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
+
     try {
       await _stt.listen(
-        // ⚠️ Dictation mode streams partials continuously
-        listenMode: stt.ListenMode.dictation,
-        partialResults: true,
-        cancelOnError: true,
-        listenFor: const Duration(minutes: 10),
-        pauseFor: const Duration(seconds: 2),
-        localeId: _localeId, // fall back to system locale
+        listenMode: listenMode,
+        partialResults: partialResults,
+        cancelOnError: cancelOnError,
+        listenFor: listenFor,
+        pauseFor: pauseFor,
+        localeId: localeId ?? _localeId,
         onResult: (res) {
-          final txt = res.recognizedWords;
-          if (txt.isNotEmpty) {
-            _partialCtrl.add(txt); // push EVERY partial
+          if (_disposed) return;
+
+          final txt = res.recognizedWords.trim();
+          if (txt.isEmpty) return;
+
+          if (res.finalResult) {
+            if (!_finalCtrl.isClosed) _finalCtrl.add(txt);
+
+            // keep UI in sync with final text too
+            if (!_partialCtrl.isClosed) _partialCtrl.add(txt);
+            _lastPartial = txt;
+            return;
+          }
+
+          // throttle + dedupe partials
+          final now = DateTime.now();
+          final shouldEmit = now.difference(_lastEmit) >= partialEmitEvery;
+          final changed = txt != _lastPartial;
+
+          if (changed && shouldEmit) {
+            if (!_partialCtrl.isClosed) _partialCtrl.add(txt);
+            _lastPartial = txt;
+            _lastEmit = now;
           }
         },
-        onSoundLevelChange: (level) {
-          _levelCtrl.add(level);
+        onSoundLevelChange: (raw) {
+          if (_disposed) return;
+
+          // Normalize raw (often ~ -50..+10ish, varies by device)
+          // Map to 0..1 and smooth for nicer UI.
+          final normalized = ((raw + 50.0) / 60.0).clamp(0.0, 1.0);
+          _smoothedLevel =
+              _smoothedLevel + levelSmoothing * (normalized - _smoothedLevel);
+
+          if (!_levelCtrl.isClosed) _levelCtrl.add(_smoothedLevel);
         },
       );
-    } catch (_) {}
+    } catch (e) {
+      if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+      if (!_disposed) _setState(MicState.ready);
+    }
   }
 
   Future<void> stop() async {
-    try { await _stt.stop(); } catch (_) {}
+    if (_disposed) return;
+    if (_state != MicState.listening) return;
+
+    _setState(MicState.stopping);
+    try {
+      await _stt.stop();
+    } catch (e) {
+      if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+    } finally {
+      if (!_disposed) _setState(MicState.ready);
+    }
+  }
+
+  Future<void> cancel() async {
+    if (_disposed) return;
+    try {
+      await _stt.cancel();
+    } catch (e) {
+      if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+    } finally {
+      if (!_disposed) _setState(MicState.ready);
+    }
   }
 
   Future<void> dispose() async {
-    try { await _stt.cancel(); } catch (_) {}
-    await _partialCtrl.close();
-    await _levelCtrl.close();
+    if (_disposed) return;
+    _disposed = true;
+    _setState(MicState.disposed);
+
+    try {
+      await _stt.cancel();
+    } catch (_) {}
+
+    await Future.wait([
+      _partialCtrl.close(),
+      _finalCtrl.close(),
+      _levelCtrl.close(),
+      _errorCtrl.close(),
+      _stateCtrl.close(),
+    ]);
   }
 }
