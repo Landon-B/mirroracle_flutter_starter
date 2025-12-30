@@ -1,0 +1,312 @@
+// lib/pages/session_summary_page.dart
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../services/streak_service.dart';
+
+class SessionSummaryData {
+  final int durationSec;
+  final double presenceScore; // 0..1
+  final List<String> affirmations;
+  final DateTime startedAtUtc;
+  final DateTime endedAtUtc;
+
+  const SessionSummaryData({
+    required this.durationSec,
+    required this.presenceScore,
+    required this.affirmations,
+    required this.startedAtUtc,
+    required this.endedAtUtc,
+  });
+}
+
+class SessionSummaryPage extends StatefulWidget {
+  final SessionSummaryData data;
+  const SessionSummaryPage({super.key, required this.data});
+
+  @override
+  State<SessionSummaryPage> createState() => _SessionSummaryPageState();
+}
+
+class _SessionSummaryPageState extends State<SessionSummaryPage> {
+  StreakInfo? _streak;
+  bool _loadingStreak = true;
+  bool _loadingStats = true;
+  int _totalSessions = 0;
+  int _affirmationsSpoken = 0;
+  String _topCategory = 'Confidence';
+  double _moodValue = 0.5;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStreaks();
+    _loadProgressStats();
+  }
+
+  Future<void> _loadStreaks() async {
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) throw Exception('No user session');
+      final s = await computeStreaks(Supabase.instance.client, uid);
+      if (!mounted) return;
+      setState(() {
+        _streak = s;
+        _loadingStreak = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingStreak = false);
+    }
+  }
+
+  Future<void> _loadProgressStats() async {
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) throw Exception('No user session');
+      final rows = await Supabase.instance.client
+          .from('sessions')
+          .select('aff_count')
+          .eq('user_id', uid)
+          .eq('completed', true);
+      final list = (rows as List? ?? const []);
+      int total = list.length;
+      int affs = 0;
+      for (final r in list) {
+        final count = (r as Map)['aff_count'];
+        if (count is int) {
+          affs += count * 3;
+        } else {
+          final parsed = int.tryParse(count?.toString() ?? '');
+          if (parsed != null) affs += parsed * 3;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _totalSessions = total;
+        _affirmationsSpoken = affs;
+        _loadingStats = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingStats = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.data;
+    final streakDays = _streak?.currentStreakDays ?? 0;
+    final favorite = d.affirmations.isNotEmpty ? d.affirmations.first : null;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF1F6FB),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            const SizedBox(height: 12),
+            Text(
+              'Reflection Room',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.dmSerifDisplay(
+                fontSize: 30,
+                color: Colors.black,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              "See how you're growing from within",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(
+                fontSize: 16,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 24),
+            _sectionCard(
+              title: 'Progress',
+              child: _loadingStats || _loadingStreak
+                  ? const Center(child: CircularProgressIndicator())
+                  : Column(
+                      children: [
+                        _progressRow(
+                          'Your Self-Devotion Streak',
+                          '$streakDays days',
+                        ),
+                        _progressRow(
+                          'Total Sessions Completed',
+                          '$_totalSessions',
+                        ),
+                        _progressRow(
+                          'Affirmations Spoken Aloud',
+                          '$_affirmationsSpoken',
+                        ),
+                        _progressRow(
+                          'Top Affirmation Category',
+                          _topCategory,
+                        ),
+                      ],
+                    ),
+            ),
+            const SizedBox(height: 18),
+            _sectionCard(
+              title: 'Mood',
+              child: Column(
+                children: [
+                  Text(
+                    'How do you feel now compared to when you started?',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.manrope(
+                      fontSize: 14,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Slider(
+                    value: _moodValue,
+                    onChanged: (v) => setState(() => _moodValue = v),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: const [
+                      Text('Drained'),
+                      Text('Steady'),
+                      Text('Replenished'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            _sectionCard(
+              title: 'Favorites',
+              child: favorite == null
+                  ? Text(
+                      'No favorites yet.',
+                      style: GoogleFonts.manrope(color: Colors.black54),
+                    )
+                  : Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD0E0FA),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _topCategory,
+                            style: GoogleFonts.manrope(
+                              fontSize: 12,
+                              color: Colors.black54,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '"$favorite"',
+                            style: GoogleFonts.manrope(
+                              fontSize: 16,
+                              color: Colors.black,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              'Saved today',
+                              style: GoogleFonts.manrope(
+                                fontSize: 12,
+                                color: Colors.black45,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              height: 52,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  textStyle: GoogleFonts.manrope(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                onPressed: () => Navigator.of(context).popUntil(
+                  (route) => route.settings.name == Navigator.defaultRouteName,
+                ),
+                child: const Text('Home'),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAFD),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFD7DEE6), width: 2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.manrope(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _progressRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: GoogleFonts.manrope(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            value,
+            style: GoogleFonts.manrope(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Colors.black87,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
