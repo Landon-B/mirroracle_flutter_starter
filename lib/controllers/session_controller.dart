@@ -178,7 +178,6 @@ class SessionController extends ChangeNotifier {
     });
 
     _mic.start(
-      listenMode: stt.ListenMode.dictation,
       partialResults: true,
       cancelOnError: false,
       listenFor: const Duration(minutes: 10),
