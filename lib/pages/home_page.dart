@@ -1,16 +1,17 @@
-import 'dart:async';
+// lib/pages/home_page.dart
+import 'dart:async'; // ✅ required for StreamSubscription
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../services/mic_service.dart'; // ✅ ADD
+import '../services/mic_service.dart'; // ✅ Mic debug page uses this
 import '../services/streak_service.dart';
 import '../widgets/streak_bar.dart';
 import 'new_session_page.dart';
@@ -468,8 +469,7 @@ class _HomePageState extends State<HomePage> {
                         builder: (context) {
                           final item = _affirmations.isEmpty
                               ? null
-                              : _affirmations[
-                                  _pageIndex % _affirmations.length];
+                              : _affirmations[_pageIndex % _affirmations.length];
                           return IconButton(
                             icon: Icon(
                               item != null && _favoriteIds.contains(item.id)
@@ -527,7 +527,6 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                       ),
-
                       const SizedBox(width: 12),
 
                       // ✅ TEMP DEBUG BUTTON
@@ -544,7 +543,9 @@ class _HomePageState extends State<HomePage> {
                           ),
                           onPressed: () async {
                             await Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const _MicDebugPage()),
+                              MaterialPageRoute(
+                                builder: (_) => const _MicDebugPage(),
+                              ),
                             );
                           },
                           icon: const Icon(Icons.mic_rounded),
@@ -659,6 +660,7 @@ class _MicDebugPageState extends State<_MicDebugPage> {
 
     _levelSub = _mic.soundLevel$.listen((v) {
       setState(() => _level = v);
+      // (optional) avoid spamming logs with level
     });
 
     _errSub = _mic.errors$.listen((e) {
@@ -700,9 +702,7 @@ class _MicDebugPageState extends State<_MicDebugPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mic debug'),
-      ),
+      appBar: AppBar(title: const Text('Mic debug')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: DefaultTextStyle(
@@ -714,13 +714,16 @@ class _MicDebugPageState extends State<_MicDebugPage> {
               const SizedBox(height: 8),
               Text('Level: ${(_level * 100).toStringAsFixed(0)}%'),
               const SizedBox(height: 6),
-              LinearProgressIndicator(value: _level),
+              LinearProgressIndicator(value: _level.clamp(0.0, 1.0)),
               const SizedBox(height: 16),
               const Text('Partial:'),
               Text(_partial, style: const TextStyle(fontSize: 16)),
               const SizedBox(height: 16),
               const Text('Final:'),
-              Text(_final, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              Text(
+                _final,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 16),
               if (_lastErr != null) ...[
                 const Text('Last error:'),
