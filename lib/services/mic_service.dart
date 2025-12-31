@@ -64,6 +64,14 @@ class MicService {
     debugPrint('[mic] $msg');
   }
 
+  AVAudioSessionCategoryOptions _iosCategoryOptions() {
+    // audio_session expects AVAudioSessionCategoryOptions (bitmask object),
+    // NOT int and NOT List<...>.
+    return AVAudioSessionCategoryOptions.defaultToSpeaker |
+        AVAudioSessionCategoryOptions.allowBluetooth |
+        AVAudioSessionCategoryOptions.mixWithOthers;
+  }
+
   Future<void> _configureIosAudioSessionIfNeeded({required bool debugLogging}) async {
     if (kIsWeb) return;
     if (!Platform.isIOS) return;
