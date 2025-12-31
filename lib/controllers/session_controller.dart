@@ -280,6 +280,7 @@ class SessionController extends ChangeNotifier {
     });
   }
 
+  // Kept for other code paths / future use, but we no longer call it from _advanceAffirmation().
   Future<void> restartListeningForNewAffirmation() async {
     if (_phase != SessionPhase.live) return;
     try {
@@ -288,6 +289,8 @@ class SessionController extends ChangeNotifier {
     _listen();
   }
 
+  /// CLEAN FIX: Do NOT stop/restart the mic when an affirmation completes.
+  /// MicService is responsible for keep-alive behavior.
   void _advanceAffirmation() {
     if (_affirmations.isEmpty) return;
 
@@ -295,8 +298,7 @@ class SessionController extends ChangeNotifier {
       _currentAffRep += 1;
       _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
       notifyListeners();
-      restartListeningForNewAffirmation();
-      return;
+      return; // <-- removed restartListeningForNewAffirmation()
     }
 
     final isLast = _currentAffIdx >= _affirmations.length - 1;
@@ -309,7 +311,7 @@ class SessionController extends ChangeNotifier {
     _currentAffRep = 0;
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
     notifyListeners();
-    restartListeningForNewAffirmation();
+    // <-- removed restartListeningForNewAffirmation()
   }
 
   Future<void> finish() async {
