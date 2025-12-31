@@ -12,9 +12,13 @@ class MicService {
   final _errorCtrl = StreamController<Object>.broadcast();
   final _stateCtrl = StreamController<MicState>.broadcast();
 
+  // ✅ NEW: status stream from the plugin (e.g., "listening", "notListening", "done")
+  final _statusCtrl = StreamController<String>.broadcast();
+  Stream<String> get status$ => _statusCtrl.stream;
+
   Stream<String> get partialText$ => _partialCtrl.stream;
   Stream<String> get finalText$ => _finalCtrl.stream;
-  Stream<double> get soundLevel$ => _levelCtrl.stream; // 0..1 (smoothed)
+  Stream<double> get soundLevel$ => _levelCtrl.stream;
   Stream<Object> get errors$ => _errorCtrl.stream;
   Stream<MicState> get state$ => _stateCtrl.stream;
 
@@ -26,14 +30,12 @@ class MicService {
 
   String? _localeId;
 
-  // partial throttling/dedupe
   String _lastPartial = '';
   DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
   Duration partialEmitEvery = const Duration(milliseconds: 100);
 
-  // sound level smoothing (EMA)
   double _smoothedLevel = 0.0;
-  double levelSmoothing = 0.25; // 0..1 (higher = more reactive)
+  double levelSmoothing = 0.25;
 
   bool get isAvailable => _available;
   bool get isListening => _stt.isListening;
@@ -53,6 +55,11 @@ class MicService {
         debugLogging: debugLogging,
         onError: (e) {
           if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+        },
+        // ✅ NEW
+        onStatus: (status) {
+          if (_disposed) return;
+          if (!_statusCtrl.isClosed) _statusCtrl.add(status);
         },
       );
 
@@ -108,14 +115,11 @@ class MicService {
 
           if (res.finalResult) {
             if (!_finalCtrl.isClosed) _finalCtrl.add(txt);
-
-            // keep UI in sync with final text too
             if (!_partialCtrl.isClosed) _partialCtrl.add(txt);
             _lastPartial = txt;
             return;
           }
 
-          // throttle + dedupe partials
           final now = DateTime.now();
           final shouldEmit = now.difference(_lastEmit) >= partialEmitEvery;
           final changed = txt != _lastPartial;
@@ -128,13 +132,9 @@ class MicService {
         },
         onSoundLevelChange: (raw) {
           if (_disposed) return;
-
-          // Normalize raw (often ~ -50..+10ish, varies by device)
-          // Map to 0..1 and smooth for nicer UI.
           final normalized = ((raw + 50.0) / 60.0).clamp(0.0, 1.0);
           _smoothedLevel =
               _smoothedLevel + levelSmoothing * (normalized - _smoothedLevel);
-
           if (!_levelCtrl.isClosed) _levelCtrl.add(_smoothedLevel);
         },
       );
@@ -158,17 +158,6 @@ class MicService {
     }
   }
 
-  Future<void> cancel() async {
-    if (_disposed) return;
-    try {
-      await _stt.cancel();
-    } catch (e) {
-      if (!_errorCtrl.isClosed) _errorCtrl.add(e);
-    } finally {
-      if (!_disposed) _setState(MicState.ready);
-    }
-  }
-
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -184,6 +173,8 @@ class MicService {
       _levelCtrl.close(),
       _errorCtrl.close(),
       _stateCtrl.close(),
+      // ✅ NEW
+      _statusCtrl.close(),
     ]);
   }
 }
