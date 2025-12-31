@@ -47,27 +47,17 @@ class MicService {
     if (!_stateCtrl.isClosed) _stateCtrl.add(s);
   }
 
-  void _log(String msg) {
-    debugPrint('[mic] $msg');
-  }
+  void _log(String msg) => debugPrint('[mic] $msg');
 
-  int _iosCategoryOptionsBitmask() {
-    // audio_session expects an *int bitmask* here (NOT a list).
-    // Keep this conservative for STT + AirPods/HFP:
-    // - defaultToSpeaker: avoids routing issues
-    // - allowBluetooth: supports Bluetooth HFP devices (AirPods, car, etc.)
-    // - mixWithOthers: optional, avoids hard-stopping other audio
-    //
-    // NOTE: allowBluetoothA2DP is not available in your version and is often
-    // not appropriate for playAndRecord anyway.
+  AVAudioSessionCategoryOptions _iosCategoryOptions() {
+    // audio_session expects AVAudioSessionCategoryOptions (bitmask object),
+    // NOT int and NOT List<...>.
     return AVAudioSessionCategoryOptions.defaultToSpeaker |
         AVAudioSessionCategoryOptions.allowBluetooth |
         AVAudioSessionCategoryOptions.mixWithOthers;
   }
 
-  Future<void> _configureIosAudioSessionIfNeeded({
-    required bool debugLogging,
-  }) async {
+  Future<void> _configureIosAudioSessionIfNeeded({required bool debugLogging}) async {
     if (kIsWeb) return;
     if (!Platform.isIOS) return;
 
@@ -77,8 +67,10 @@ class MicService {
       await session.configure(
         AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions: _iosCategoryOptionsBitmask(),
+          avAudioSessionCategoryOptions: _iosCategoryOptions(),
           avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+
+          // Harmless on iOS; used on Android.
           androidAudioAttributes: const AndroidAudioAttributes(
             usage: AndroidAudioUsage.voiceCommunication,
             contentType: AndroidAudioContentType.speech,
@@ -91,7 +83,7 @@ class MicService {
       if (debugLogging) _log('[audio_session] configured');
     } catch (e) {
       if (debugLogging) _log('[audio_session] configure failed: $e');
-      // Don’t fail init just because audio session configure failed.
+      // Don't fail init just because audio session configuration failed.
     }
   }
 
@@ -204,8 +196,7 @@ class MicService {
         onSoundLevelChange: (raw) {
           if (_disposed) return;
           final normalized = ((raw + 50.0) / 60.0).clamp(0.0, 1.0);
-          _smoothedLevel =
-              _smoothedLevel + levelSmoothing * (normalized - _smoothedLevel);
+          _smoothedLevel = _smoothedLevel + levelSmoothing * (normalized - _smoothedLevel);
           if (!_levelCtrl.isClosed) _levelCtrl.add(_smoothedLevel);
         },
       );
