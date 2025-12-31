@@ -77,12 +77,10 @@ class MicService {
       await session.configure(
         AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions: const AVAudioSessionCategoryOptions([
-            AVAudioSessionCategoryOptions.defaultToSpeaker,
-            AVAudioSessionCategoryOptions.allowBluetooth,
-            AVAudioSessionCategoryOptions.mixWithOthers,
-          ]),
+          avAudioSessionCategoryOptions: _iosCategoryOptions(),
           avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+
+          // Harmless on iOS; used on Android.
           androidAudioAttributes: const AndroidAudioAttributes(
             usage: AndroidAudioUsage.voiceCommunication,
             contentType: AndroidAudioContentType.speech,

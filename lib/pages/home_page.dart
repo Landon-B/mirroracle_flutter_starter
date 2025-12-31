@@ -680,7 +680,7 @@ class _MicDebugPageState extends State<_MicDebugPage> {
       partialResults: true,
       cancelOnError: false,
       listenFor: const Duration(minutes: 10),
-      pauseFor: const Duration(seconds: 1),
+      pauseFor: const Duration(seconds: 6),
     );
     debugPrint('[mic][start-debug-page] called');
   }
