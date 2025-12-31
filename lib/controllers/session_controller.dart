@@ -44,7 +44,7 @@ class SessionController extends ChangeNotifier {
   CameraService get camera => _camera;
   MicService get mic => _mic;
 
-  // camera state (controller as view-model)
+  // camera state
   bool _cameraWarmingUp = true;
   bool get cameraWarmingUp => _cameraWarmingUp;
 
@@ -70,12 +70,14 @@ class SessionController extends ChangeNotifier {
   final List<String> _affirmations;
   List<String> get affirmations => List.unmodifiable(_affirmations);
 
+  // Current affirmation index (0..n-1)
   int _currentAffIdx = 0;
   int get currentAffIdx => _currentAffIdx;
 
-  /// NEW: we track *rounds* across the full list instead of repeating each aff 3x in a row.
-  int _round = 0; // 0..kRepsPerAffirmation-1
-  int get currentAffRep => _round; // keep existing API surface if your UI uses it
+  // We keep this getter because UI may reference it, but we now use it as "round index".
+  // 0 = first round, 1 = second round, 2 = third round
+  int _currentAffRep = 0;
+  int get currentAffRep => _currentAffRep;
 
   static const int kRepsPerAffirmation = 3;
   int get repsPerAffirmation => kRepsPerAffirmation;
@@ -86,12 +88,16 @@ class SessionController extends ChangeNotifier {
   bool _micNeedsRestart = false;
   bool get micNeedsRestart => _micNeedsRestart;
 
+  bool _listenTimedOut = false;
+  bool get listenTimedOut => _listenTimedOut;
+
   String? _status;
   String? get status => _status;
 
   DateTime? _startedAt;
 
   Timer? _ticker;
+  Timer? _listenTimeoutTimer;
 
   StreamSubscription<String>? _partialSub;
   StreamSubscription<String>? _finalSub;
@@ -99,6 +105,18 @@ class SessionController extends ChangeNotifier {
   StreamSubscription<MicState>? _stateSub;
 
   bool _started = false;
+
+  // ---- NEW: ignore tail-end mic results right after switching affirmations ----
+  DateTime _ignoreMicUntil = DateTime.fromMillisecondsSinceEpoch(0);
+
+  bool _shouldIgnoreMicResult() {
+    return DateTime.now().isBefore(_ignoreMicUntil);
+  }
+
+  void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 650)]) {
+    // 650ms is enough to drop the "I am ..." spillover + any late plugin callbacks.
+    _ignoreMicUntil = DateTime.now().add(d);
+  }
 
   /// Call once from the page. Initializes camera (best-effort) and starts session.
   Future<void> initAndStart() async {
@@ -128,11 +146,13 @@ class SessionController extends ChangeNotifier {
     _startedAt = DateTime.now().toUtc();
 
     _currentAffIdx = 0;
-    _round = 0;
+    _currentAffRep = 0;
 
     _micNeedsRestart = false;
+    _listenTimedOut = false;
 
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
+    _armMicIgnoreWindow(); // avoid instant carry-over on session start
     notifyListeners();
 
     await WakelockPlus.enable();
@@ -162,6 +182,7 @@ class SessionController extends ChangeNotifier {
 
     _partialSub = _mic.partialText$.listen((text) {
       if (_phase != SessionPhase.live) return;
+      if (_shouldIgnoreMicResult()) return;
 
       if (debugMic) {
         debugPrint('[mic][partial] $text');
@@ -174,6 +195,7 @@ class SessionController extends ChangeNotifier {
 
     _finalSub = _mic.finalText$.listen((text) {
       if (_phase != SessionPhase.live) return;
+      if (_shouldIgnoreMicResult()) return;
 
       if (debugMic) {
         debugPrint('[mic][final] $text');
@@ -184,68 +206,66 @@ class SessionController extends ChangeNotifier {
       if (changed) notifyListeners();
 
       if (_speechMatcher.isComplete) {
-        _advanceAffirmation(); // NOTE: does NOT stop/restart mic anymore
+        _advanceAffirmation();
       }
     });
 
     _errSub = _mic.errors$.listen((err) {
       if (_phase != SessionPhase.live) return;
       if (debugMic) debugPrint('[mic][error] $err');
-
-      // Treat errors as “mic might need manual restart” (UI turns red).
-      _micNeedsRestart = true;
-      notifyListeners();
+      _restartListeningSoon();
     });
 
+    // Minimal recovery only (don’t fight MicService keep-alive).
     _stateSub = _mic.state$.listen((s) {
       if (_phase != SessionPhase.live) return;
       if (debugMic) debugPrint('[mic][state] $s');
 
-      // IMPORTANT: do NOT auto-stop or auto-restart here.
-      // Your MicService keep-alive handles iOS “done/notListening” transitions.
-
-      // If we ever see we’re actively listening again, clear the UI “paused” flag.
-      if (s == MicState.listening) {
-        if (_micNeedsRestart) {
-          _micNeedsRestart = false;
-          notifyListeners();
-        }
+      // If we’re live and fell back to ready (not listening), softly re-start.
+      if (s == MicState.ready && !_mic.isListening) {
+        _restartListeningSoon();
       }
     });
   }
 
   Future<void> _ensureMicReadyAndListen() async {
     final ok = await _mic.init(debugLogging: false);
-    if (debugMic) debugPrint('[mic][init] ok=$ok');
-
+    debugPrint('[mic][init] ok=$ok');
     if (!ok) {
       _micNeedsRestart = true;
       notifyListeners();
       return;
     }
-
-    await _listen();
+    _listen();
   }
 
-  /// Start listening (do NOT hard-stop first).
-  /// Let MicService keep-alive manage its internal restart behavior on iOS.
-  Future<void> _listen() async {
+  /// For keep-alive MicService, just start if not already listening.
+  void _listen() async {
     if (_phase != SessionPhase.live) return;
 
+    _listenTimeoutTimer?.cancel();
+    _listenTimedOut = false;
     _micNeedsRestart = false;
     notifyListeners();
 
-    try {
-      // If already listening, do nothing.
-      if (_mic.isListening) return;
+    _listenTimeoutTimer = Timer(const Duration(minutes: 10), () {
+      if (_phase != SessionPhase.live) return;
+      _listenTimedOut = true;
+      _micNeedsRestart = true;
+      notifyListeners();
+      _mic.stop();
+    });
 
-      await _mic.start(
-        localeId: 'en_US',
-        partialResults: true,
-        cancelOnError: false,
-        listenFor: const Duration(minutes: 10),
-        pauseFor: const Duration(seconds: 6),
-      );
+    try {
+      if (!_mic.isListening) {
+        await _mic.start(
+          localeId: 'en_US',
+          partialResults: true,
+          cancelOnError: false,
+          listenFor: const Duration(minutes: 10),
+          pauseFor: const Duration(seconds: 6),
+        );
+      }
     } catch (e) {
       if (debugMic) debugPrint('[mic][listen start failed] $e');
       _micNeedsRestart = true;
@@ -259,39 +279,52 @@ class SessionController extends ChangeNotifier {
     _listen();
   }
 
-  /// NEW: cycles affirmations across rounds:
-  /// round 0: aff0, aff1, aff2...
-  /// round 1: aff0, aff1, aff2...
-  /// round 2: aff0, aff1, aff2...
+  void _restartListeningSoon() {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (_phase != SessionPhase.live) return;
+      if (!_mic.isListening && !_micNeedsRestart) {
+        _listen();
+      }
+    });
+  }
+
+  // ---- UPDATED: round-robin affirmations across 3 rounds ----
+  // Order: A1, A2, A3, A1, A2, A3, A1, A2, A3
   void _advanceAffirmation() {
     if (_affirmations.isEmpty) return;
 
-    final lastAffIdx = _affirmations.length - 1;
-    final isEndOfRound = _currentAffIdx == lastAffIdx;
+    // Move to next affirmation
+    final nextIdx = _currentAffIdx + 1;
 
-    if (isEndOfRound) {
-      final isLastRound = _round >= kRepsPerAffirmation - 1;
-      if (isLastRound) {
-        finish();
-        return;
-      }
-      _round += 1;
-      _currentAffIdx = 0;
-    } else {
-      _currentAffIdx += 1;
+    if (nextIdx < _affirmations.length) {
+      _currentAffIdx = nextIdx;
+      _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
+      _armMicIgnoreWindow(); // prevents "I am" carry-over
+      notifyListeners();
+      return;
     }
 
-    _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-    notifyListeners();
+    // End of list => advance the round
+    final nextRound = _currentAffRep + 1;
 
-    // IMPORTANT: do NOT stop/restart mic here.
-    // MicService keep-alive continues listening across transitions.
+    if (nextRound < kRepsPerAffirmation) {
+      _currentAffRep = nextRound;
+      _currentAffIdx = 0;
+      _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
+      _armMicIgnoreWindow();
+      notifyListeners();
+      return;
+    }
+
+    // All rounds done
+    finish();
   }
 
   Future<void> finish() async {
     if (_phase == SessionPhase.saving || _phase == SessionPhase.done) return;
 
     _ticker?.cancel();
+    _listenTimeoutTimer?.cancel();
 
     await _mic.stop();
     await WakelockPlus.disable();
@@ -349,6 +382,7 @@ class SessionController extends ChangeNotifier {
 
   Future<void> abort() async {
     _ticker?.cancel();
+    _listenTimeoutTimer?.cancel();
     await _mic.stop();
     await WakelockPlus.disable();
   }
@@ -377,6 +411,7 @@ class SessionController extends ChangeNotifier {
   @override
   void dispose() {
     _ticker?.cancel();
+    _listenTimeoutTimer?.cancel();
 
     _partialSub?.cancel();
     _finalSub?.cancel();
