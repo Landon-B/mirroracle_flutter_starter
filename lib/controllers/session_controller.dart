@@ -256,7 +256,7 @@ class SessionController extends ChangeNotifier {
         partialResults: true,
         cancelOnError: false,
         listenFor: const Duration(minutes: 10),
-        pauseFor: const Duration(seconds: 2),
+        pauseFor: const Duration(seconds: 6),
       );
     } catch (e) {
       if (debugMic) debugPrint('[mic][listen start failed] $e');
