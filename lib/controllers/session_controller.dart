@@ -214,6 +214,7 @@ class SessionController extends ChangeNotifier {
 
   Future<void> _ensureMicReadyAndListen() async {
     final ok = await _mic.init(debugLogging: false);
+    debugPrint('[mic][init] ok=$ok');
     if (!ok) {
       _micNeedsRestart = true;
       notifyListeners();
@@ -251,6 +252,7 @@ class SessionController extends ChangeNotifier {
 
     try {
       await _mic.start(
+        localeId: 'en_US',
         partialResults: true,
         cancelOnError: false,
         listenFor: const Duration(minutes: 10),

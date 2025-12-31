@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
@@ -15,6 +16,9 @@ import 'new_session_page.dart';
 import 'profile_overlay.dart';
 
 const bool kForceStreakBarEveryLaunch = true; // TESTING ONLY
+
+// Show debug button only in debug/profile builds (not release/TestFlight).
+bool get _kShowMicDebugButton => kDebugMode || kProfileMode;
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -274,6 +278,18 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Future<void> _startDebugSession() async {
+    // A short phrase that should be very easy for STT.
+    const seed = ['hello mirroracle'];
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const NewSessionPage(initialAffirmations: seed),
+      ),
+    );
+    if (!mounted) return;
+    _loadAffirmations();
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
@@ -367,6 +383,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 const SizedBox(height: 24),
+
                 Expanded(
                   child: _loading
                       ? const Center(child: CircularProgressIndicator())
@@ -448,6 +465,7 @@ class _HomePageState extends State<HomePage> {
                           },
                         ),
                 ),
+
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Row(
@@ -466,19 +484,16 @@ class _HomePageState extends State<HomePage> {
                         builder: (context) {
                           final item = _affirmations.isEmpty
                               ? null
-                              : _affirmations[
-                                  _pageIndex % _affirmations.length];
+                              : _affirmations[_pageIndex % _affirmations.length];
                           return IconButton(
                             icon: Icon(
-                              item != null &&
-                                      _favoriteIds.contains(item.id)
+                              item != null && _favoriteIds.contains(item.id)
                                   ? Icons.favorite_rounded
                                   : Icons.favorite_border_rounded,
                             ),
                             color: const Color(0xFFE07A6B),
-                            onPressed: item == null
-                                ? null
-                                : () => _toggleFavorite(item),
+                            onPressed:
+                                item == null ? null : () => _toggleFavorite(item),
                             tooltip: 'Favorite',
                           );
                         },
@@ -486,7 +501,20 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
+
+                const SizedBox(height: 12),
+
+                // TEMP DEBUG BUTTON (remove later)
+                if (_kShowMicDebugButton)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: OutlinedButton.icon(
+                      onPressed: _startDebugSession,
+                      icon: const Icon(Icons.mic_rounded),
+                      label: const Text('Mic Debug'),
+                    ),
+                  ),
+
                 Padding(
                   padding: const EdgeInsets.only(bottom: 24),
                   child: SizedBox(
