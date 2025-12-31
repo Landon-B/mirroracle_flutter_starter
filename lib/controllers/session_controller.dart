@@ -34,6 +34,12 @@ class SessionController extends ChangeNotifier {
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
   }
 
+  void _dbg(String msg) {
+  if (kDebugMode) {
+    debugPrint('[SESSION] $msg');
+  }
+}
+
   // deps
   final CameraService _camera;
   final MicService _mic;
@@ -163,26 +169,34 @@ class SessionController extends ChangeNotifier {
     await _errSub?.cancel();
     await _micStateSub?.cancel();
 
-    // If the plugin drops back to READY while we're live, re-start listening.
+    _dbg('Mic wired');
+
     _micStateSub = _mic.state$.listen((s) {
+      _dbg('Mic state → $s');
       if (_phase != SessionPhase.live) return;
 
       if (s == MicState.ready && !_mic.isListening && !_micNeedsRestart) {
+        _dbg('Mic returned to READY unexpectedly → restarting');
         _restartListeningSoon();
       }
     });
 
     _partialSub = _mic.partialText$.listen((raw) {
       if (_phase != SessionPhase.live) return;
+
+      _dbg('PARTIAL (raw): "$raw"');
       _applySpeech(raw, allowAdvance: false);
     });
 
     _finalSub = _mic.finalText$.listen((raw) {
       if (_phase != SessionPhase.live) return;
+
+      _dbg('FINAL (raw): "$raw"');
       _applySpeech(raw, allowAdvance: true);
     });
 
-    _errSub = _mic.errors$.listen((_) {
+    _errSub = _mic.errors$.listen((e) {
+      _dbg('Mic error: $e');
       if (_phase != SessionPhase.live) return;
       _micNeedsRestart = true;
       notifyListeners();
@@ -216,11 +230,26 @@ class SessionController extends ChangeNotifier {
 
   void _applySpeech(String raw, {required bool allowAdvance}) {
     final normalized = _normalizeSpeechText(raw);
+
+    _dbg('Normalized: "$normalized"');
+
     final spokenTokens = _speechMatcher.tokenizeSpeech(normalized);
+    _dbg('Tokens: $spokenTokens');
+
+    final before = _speechMatcher.activeToken;
     final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
-    if (changed) notifyListeners();
+    final after = _speechMatcher.activeToken;
+
+    if (changed) {
+      _dbg(
+        'Matcher advanced: $before → $after '
+        '(target=${_speechMatcher.tokens})',
+      );
+      notifyListeners();
+    }
 
     if (allowAdvance && _speechMatcher.isComplete) {
+      _dbg('Affirmation COMPLETE');
       _advanceAffirmation();
     }
   }
@@ -230,28 +259,31 @@ class SessionController extends ChangeNotifier {
   Future<void> _listen({required bool resetMatcher}) async {
     if (_phase != SessionPhase.live) return;
 
+    _dbg('Starting mic listen (resetMatcher=$resetMatcher)');
+
     _listenTimeoutTimer?.cancel();
     _listenTimedOut = false;
     _micNeedsRestart = false;
 
     if (resetMatcher) {
+      _dbg('Resetting matcher for "${_affirmations[_currentAffIdx]}"');
       _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
     }
 
     notifyListeners();
 
-    // Cleanly stop/cancel any existing listen session before starting a new one.
     try {
       if (_mic.isListening) {
+        _dbg('Stopping existing mic session');
         await _mic.stop();
       } else {
         await _mic.cancel();
       }
     } catch (_) {}
 
-    // Safety timeout: after N minutes, require a tap to resume.
     _listenTimeoutTimer = Timer(const Duration(minutes: 10), () {
       if (_phase != SessionPhase.live) return;
+      _dbg('Mic listen timeout');
       _listenTimedOut = true;
       _micNeedsRestart = true;
       notifyListeners();
@@ -264,9 +296,10 @@ class SessionController extends ChangeNotifier {
         cancelOnError: false,
         listenFor: const Duration(minutes: 10),
         pauseFor: const Duration(seconds: 1),
-        // listenMode stays default (dictation) in your MicService.
       );
-    } catch (_) {
+      _dbg('Mic listening started');
+    } catch (e) {
+      _dbg('Mic start failed: $e');
       _micNeedsRestart = true;
       notifyListeners();
     }
