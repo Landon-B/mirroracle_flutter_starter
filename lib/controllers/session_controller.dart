@@ -39,7 +39,6 @@ class SessionController extends ChangeNotifier {
   final CameraService _camera;
   final MicService _mic;
 
-  // Toggle to print recognized speech
   final bool debugMic;
 
   CameraService get camera => _camera;
@@ -71,11 +70,9 @@ class SessionController extends ChangeNotifier {
   final List<String> _affirmations;
   List<String> get affirmations => List.unmodifiable(_affirmations);
 
-  // Current affirmation index (0..n-1)
   int _currentAffIdx = 0;
   int get currentAffIdx => _currentAffIdx;
 
-  // Round index (0..2)
   int _currentAffRep = 0;
   int get currentAffRep => _currentAffRep;
 
@@ -106,25 +103,132 @@ class SessionController extends ChangeNotifier {
 
   bool _started = false;
 
-  // ---- NEW: ignore tail-end mic results right after switching affirmations ----
+  // ---- ignore tail-end mic results right after switching affirmations ----
   DateTime _ignoreMicUntil = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _advanceTimer;
 
   bool _shouldIgnoreMicResult() => DateTime.now().isBefore(_ignoreMicUntil);
 
   void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 650)]) {
-    // Drop “spillover” tokens + late callbacks from the previous affirmation.
     _ignoreMicUntil = DateTime.now().add(d);
   }
 
   void _resetMatcherAndShieldForNewAffirmation() {
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-
-    // IMPORTANT: Do this BEFORE the UI shows the next affirmation, so any late
-    // partial/final callbacks are ignored immediately (no “I am” carry-over).
     _armMicIgnoreWindow();
-
     notifyListeners();
+  }
+
+  // ---------------------------
+  // Favorites (Supabase)
+  // ---------------------------
+  final Set<String> _favoriteAffirmationIds = <String>{};
+  bool _favoritesLoaded = false;
+
+  bool get favoritesLoaded => _favoritesLoaded;
+
+  String get currentAffirmationText {
+    if (_affirmations.isEmpty) return '';
+    return _affirmations[_currentAffIdx];
+  }
+
+  bool get isCurrentAffirmationFavorited {
+    final id = _affirmationIdCache[currentAffirmationText];
+    if (id == null) return false;
+    return _favoriteAffirmationIds.contains(id);
+  }
+
+  // Cache: affirmation text -> affirmation.id
+  final Map<String, String> _affirmationIdCache = <String, String>{};
+
+  Future<String?> _getAffirmationIdForText(String text) async {
+    if (text.trim().isEmpty) return null;
+
+    final cached = _affirmationIdCache[text];
+    if (cached != null) return cached;
+
+    final resp = await Supabase.instance.client
+        .from('affirmations')
+        .select('id')
+        .eq('text', text)
+        .limit(1)
+        .maybeSingle();
+
+    final id = resp?['id'] as String?;
+    if (id != null) _affirmationIdCache[text] = id;
+    return id;
+  }
+
+  Future<void> _loadFavoritesIfNeeded() async {
+    if (_favoritesLoaded) return;
+
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) {
+      _favoritesLoaded = true;
+      return;
+    }
+
+    final rows = await Supabase.instance.client
+        .from('favorite_affirmations')
+        .select('affirmation_id')
+        .eq('user_id', uid);
+
+    _favoriteAffirmationIds
+      ..clear()
+      ..addAll(
+        rows.map((r) => r['affirmation_id'] as String).where((s) => s.isNotEmpty),
+      );
+
+    _favoritesLoaded = true;
+    notifyListeners();
+  }
+
+  Future<void> toggleFavoriteCurrentAffirmation() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) {
+      _status = 'Please sign in to favorite affirmations.';
+      notifyListeners();
+      return;
+    }
+
+    final text = currentAffirmationText;
+    final affId = await _getAffirmationIdForText(text);
+
+    if (affId == null) {
+      _status = 'Could not favorite: affirmation not found in DB.';
+      notifyListeners();
+      return;
+    }
+
+    final isFav = _favoriteAffirmationIds.contains(affId);
+
+    try {
+      if (isFav) {
+        await Supabase.instance.client
+            .from('favorite_affirmations')
+            .delete()
+            .eq('user_id', uid)
+            .eq('affirmation_id', affId);
+
+        _favoriteAffirmationIds.remove(affId);
+      } else {
+        // If you have a unique constraint on (user_id, affirmation_id), this is safe.
+        await Supabase.instance.client.from('favorite_affirmations').upsert(
+          {
+            'user_id': uid,
+            'affirmation_id': affId,
+          },
+          onConflict: 'user_id,affirmation_id',
+        );
+
+        _favoriteAffirmationIds.add(affId);
+      }
+
+      notifyListeners();
+    } catch (e) {
+      _status = 'Favorite failed: $e';
+      notifyListeners();
+    }
   }
 
   /// Call once from the page. Initializes camera (best-effort) and starts session.
@@ -144,6 +248,7 @@ class SessionController extends ChangeNotifier {
       notifyListeners();
     }
 
+    await _loadFavoritesIfNeeded();
     await start();
   }
 
@@ -160,7 +265,7 @@ class SessionController extends ChangeNotifier {
     _micNeedsRestart = false;
     _listenTimedOut = false;
 
-    _resetMatcherAndShieldForNewAffirmation(); // includes ignore window
+    _resetMatcherAndShieldForNewAffirmation();
 
     await WakelockPlus.enable();
 
@@ -180,7 +285,6 @@ class SessionController extends ChangeNotifier {
     });
   }
 
-  /// Wire subscriptions once per session start, and guard by phase.
   Future<void> _wireMic() async {
     await _partialSub?.cancel();
     await _finalSub?.cancel();
@@ -219,7 +323,6 @@ class SessionController extends ChangeNotifier {
       _restartListeningSoon();
     });
 
-    // Minimal recovery only (don’t fight MicService keep-alive).
     _stateSub = _mic.state$.listen((s) {
       if (_phase != SessionPhase.live) return;
       if (debugMic) debugPrint('[mic][state] $s');
@@ -241,7 +344,6 @@ class SessionController extends ChangeNotifier {
     _listen();
   }
 
-  /// For keep-alive MicService, just start if not already listening.
   void _listen() async {
     if (_phase != SessionPhase.live) return;
 
@@ -290,43 +392,31 @@ class SessionController extends ChangeNotifier {
     });
   }
 
-  // ---- UPDATED: round-robin affirmations across 3 rounds ----
-  // Order: A1, A2, A3, A1, A2, A3, A1, A2, A3
-  //
-  // ---- UPDATED: remove transition delay/jank ----
-  // Immediately reset matcher + shield, and also briefly ignore late mic events.
   void _advanceAffirmation() {
     if (_affirmations.isEmpty) return;
 
-    // Prevent double-advances if multiple finals arrive close together.
     _advanceTimer?.cancel();
     _advanceTimer = null;
 
     if (_phase != SessionPhase.live) return;
 
-    // Move to next affirmation index (within the same round)
     final nextIdx = _currentAffIdx + 1;
 
     if (nextIdx < _affirmations.length) {
       _currentAffIdx = nextIdx;
-
-      // Apply the reset + ignore window immediately (no UI “gray out” lag).
       _resetMatcherAndShieldForNewAffirmation();
       return;
     }
 
-    // End of list => advance the round
     final nextRound = _currentAffRep + 1;
 
     if (nextRound < kRepsPerAffirmation) {
       _currentAffRep = nextRound;
       _currentAffIdx = 0;
-
       _resetMatcherAndShieldForNewAffirmation();
       return;
     }
 
-    // All rounds done
     finish();
   }
 

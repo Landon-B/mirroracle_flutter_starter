@@ -1,6 +1,11 @@
+// lib/pages/new_session_page.dart
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -28,6 +33,9 @@ class _NewSessionPageState extends State<NewSessionPage>
 
   StreamSubscription<SessionNavEvent>? _navSub;
 
+  // Wrap the whole screen so Share captures camera + overlay
+  final GlobalKey _captureKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
@@ -53,7 +61,6 @@ class _NewSessionPageState extends State<NewSessionPage>
       }
     });
 
-    // controller now owns camera init + start
     _controller.initAndStart();
   }
 
@@ -71,7 +78,6 @@ class _NewSessionPageState extends State<NewSessionPage>
     WidgetsBinding.instance.removeObserver(this);
     _navSub?.cancel();
 
-    // Defensive: controller disables wakelock on finish/abort, but keep this.
     WakelockPlus.disable();
 
     _controller.dispose();
@@ -81,10 +87,56 @@ class _NewSessionPageState extends State<NewSessionPage>
     super.dispose();
   }
 
-  Future<void> _shareAffirmation() async {
-    final affs = _controller.affirmations;
-    if (affs.isEmpty) return;
-    await Share.share(affs[_controller.currentAffIdx]);
+  Future<void> _shareScreenshot() async {
+    // Ensure the frame is painted before capture.
+    await WidgetsBinding.instance.endOfFrame;
+
+    final ctx = _captureKey.currentContext;
+    if (ctx == null) return;
+
+    final boundary = ctx.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null) return;
+
+    try {
+      final ui.Image image =
+          await boundary.toImage(pixelRatio: ui.window.devicePixelRatio);
+
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+
+      final Uint8List pngBytes = byteData.buffer.asUint8List();
+
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}/mirroracle_session_${DateTime.now().millisecondsSinceEpoch}.png',
+      );
+      await file.writeAsBytes(pngBytes, flush: true);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Mirroracle ✨',
+      );
+    } catch (e) {
+      // optional: show snack
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Share failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleFavorite() async {
+    await _controller.toggleFavoriteCurrentAffirmation();
+    if (!mounted) return;
+
+    final isFav = _controller.isCurrentAffirmationFavorited;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(isFav ? 'Added to favorites' : 'Removed from favorites'),
+        duration: const Duration(milliseconds: 900),
+      ),
+    );
   }
 
   Future<void> _abortSession() async {
@@ -124,7 +176,8 @@ class _NewSessionPageState extends State<NewSessionPage>
     return TextSpan(children: children);
   }
 
-  String _capitalizeFirst(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+  String _capitalizeFirst(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
   @override
   Widget build(BuildContext context) {
@@ -143,30 +196,37 @@ class _NewSessionPageState extends State<NewSessionPage>
             affs.isNotEmpty ? affs[_controller.currentAffIdx] : '';
 
         return Scaffold(
-          body: Stack(
-            fit: StackFit.expand,
-            children: [
-              SessionCameraPreview(
-                controller: _cameraService.controller,
-                initFuture: _cameraService.initFuture,
-                warmingUp: _controller.cameraWarmingUp,
-              ),
-              SessionOverlay(
-                showLiveHud: showLiveHud,
-                showSaving: showSaving,
-                currentAffIdx: _controller.currentAffIdx,
-                totalAffirmations: affs.length,
-                affirmationSpan: _controller.speechMatcher.tokens.isNotEmpty
-                    ? _buildAffirmationSpans(context)
-                    : null,
-                fallbackText: _capitalizeFirst(currentText),
-                micNeedsRestart: _controller.micNeedsRestart,
-                onMicTap: _controller.onMicTap,
-                onShare: _shareAffirmation,
-                onClose: _abortSession,
-                statusText: _controller.status,
-              ),
-            ],
+          body: RepaintBoundary(
+            key: _captureKey,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                SessionCameraPreview(
+                  controller: _cameraService.controller,
+                  initFuture: _cameraService.initFuture,
+                  warmingUp: _controller.cameraWarmingUp,
+                ),
+                SessionOverlay(
+                  showLiveHud: showLiveHud,
+                  showSaving: showSaving,
+                  currentAffIdx: _controller.currentAffIdx,
+                  totalAffirmations: affs.length,
+                  affirmationSpan: _controller.speechMatcher.tokens.isNotEmpty
+                      ? _buildAffirmationSpans(context)
+                      : null,
+                  fallbackText: _capitalizeFirst(currentText),
+                  micNeedsRestart: _controller.micNeedsRestart,
+                  onMicTap: _controller.onMicTap,
+                  onShare: _shareScreenshot,
+                  onClose: _abortSession,
+                  statusText: _controller.status,
+
+                  // ✅ requires the small SessionOverlay patch below
+                  onFavorite: _toggleFavorite,
+                  isFavorited: _controller.isCurrentAffirmationFavorited,
+                ),
+              ],
+            ),
           ),
         );
       },

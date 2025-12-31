@@ -12,19 +12,30 @@ class SessionOverlay extends StatelessWidget {
     required this.micNeedsRestart,
     required this.onMicTap,
     required this.onShare,
+    required this.onFavoriteTap,
+    required this.isFavorited,
     required this.onClose,
     required this.statusText,
   });
 
   final bool showLiveHud;
   final bool showSaving;
+
   final int currentAffIdx;
   final int totalAffirmations;
+
   final InlineSpan? affirmationSpan;
   final String fallbackText;
+
   final bool micNeedsRestart;
   final VoidCallback onMicTap;
+
   final VoidCallback onShare;
+
+  // Favorites
+  final VoidCallback onFavoriteTap;
+  final bool isFavorited;
+
   final VoidCallback onClose;
   final String? statusText;
 
@@ -32,6 +43,7 @@ class SessionOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
+        // Gradient overlay
         Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -49,10 +61,13 @@ class SessionOverlay extends StatelessWidget {
             ),
           ),
         ),
-        Container(
+
+        // Content
+        Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
+              // ── Top HUD ────────────────────────────────────────────────
               if (showLiveHud)
                 Padding(
                   padding: const EdgeInsets.only(top: 24, bottom: 12),
@@ -76,6 +91,8 @@ class SessionOverlay extends StatelessWidget {
                         ),
                       ),
                       const Spacer(),
+
+                      // Share
                       Material(
                         color: Colors.transparent,
                         child: InkWell(
@@ -87,12 +104,18 @@ class SessionOverlay extends StatelessWidget {
                               color: Colors.black45,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.ios_share_rounded,
-                                color: Colors.white, size: 18),
+                            child: const Icon(
+                              Icons.ios_share_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
                           ),
                         ),
                       ),
+
                       const SizedBox(width: 8),
+
+                      // Close
                       Material(
                         color: Colors.transparent,
                         child: InkWell(
@@ -104,15 +127,21 @@ class SessionOverlay extends StatelessWidget {
                               color: Colors.black45,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.close_rounded,
-                                color: Colors.white, size: 18),
+                            child: const Icon(
+                              Icons.close_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
+
               const Spacer(),
+
+              // ── Affirmation Card ───────────────────────────────────────
               if (showLiveHud) ...[
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -137,6 +166,7 @@ class SessionOverlay extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // Header row
                       Row(
                         children: [
                           const SizedBox(width: 8),
@@ -154,11 +184,33 @@ class SessionOverlay extends StatelessWidget {
                                   ),
                             ),
                           ),
-                          const Icon(Icons.favorite_border_rounded,
-                              color: Colors.black54, size: 18),
+
+                          // ❤️ Favorite toggle
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(10),
+                              onTap: onFavoriteTap,
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Icon(
+                                  isFavorited
+                                      ? Icons.favorite_rounded
+                                      : Icons.favorite_border_rounded,
+                                  color: isFavorited
+                                      ? Colors.redAccent
+                                      : Colors.black54,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
+
                       const SizedBox(height: 8),
+
+                      // Affirmation text
                       if (affirmationSpan != null)
                         RichText(
                           textAlign: TextAlign.center,
@@ -176,7 +228,10 @@ class SessionOverlay extends StatelessWidget {
                                 color: Colors.black,
                               ),
                         ),
+
                       const SizedBox(height: 10),
+
+                      // Progress dots
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: List.generate(
@@ -186,10 +241,10 @@ class SessionOverlay extends StatelessWidget {
                             height: 6,
                             width: 6,
                             decoration: BoxDecoration(
+                              shape: BoxShape.circle,
                               color: i == currentAffIdx
                                   ? Colors.black54
                                   : Colors.black26,
-                              shape: BoxShape.circle,
                             ),
                           ),
                         ),
@@ -197,7 +252,10 @@ class SessionOverlay extends StatelessWidget {
                     ],
                   ),
                 ),
+
                 const SizedBox(height: 16),
+
+                // ── Mic Control ───────────────────────────────────────────
                 Column(
                   children: [
                     InkWell(
@@ -208,8 +266,9 @@ class SessionOverlay extends StatelessWidget {
                         child: Icon(
                           Icons.mic_rounded,
                           size: 28,
-                          color:
-                              micNeedsRestart ? Colors.redAccent : Colors.black87,
+                          color: micNeedsRestart
+                              ? Colors.redAccent
+                              : Colors.black87,
                         ),
                       ),
                     ),
@@ -227,6 +286,8 @@ class SessionOverlay extends StatelessWidget {
                   ],
                 ),
               ],
+
+              // ── Saving HUD ─────────────────────────────────────────────
               if (showSaving)
                 Container(
                   padding: const EdgeInsets.all(12),
