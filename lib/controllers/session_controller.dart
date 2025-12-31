@@ -1,3 +1,4 @@
+// lib/controllers/session_controller.dart
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -74,8 +75,7 @@ class SessionController extends ChangeNotifier {
   int _currentAffIdx = 0;
   int get currentAffIdx => _currentAffIdx;
 
-  // We keep this getter because UI may reference it, but we now use it as "round index".
-  // 0 = first round, 1 = second round, 2 = third round
+  // Round index (0..2)
   int _currentAffRep = 0;
   int get currentAffRep => _currentAffRep;
 
@@ -108,14 +108,23 @@ class SessionController extends ChangeNotifier {
 
   // ---- NEW: ignore tail-end mic results right after switching affirmations ----
   DateTime _ignoreMicUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _advanceTimer;
 
-  bool _shouldIgnoreMicResult() {
-    return DateTime.now().isBefore(_ignoreMicUntil);
-  }
+  bool _shouldIgnoreMicResult() => DateTime.now().isBefore(_ignoreMicUntil);
 
   void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 650)]) {
-    // 650ms is enough to drop the "I am ..." spillover + any late plugin callbacks.
+    // Drop “spillover” tokens + late callbacks from the previous affirmation.
     _ignoreMicUntil = DateTime.now().add(d);
+  }
+
+  void _resetMatcherAndShieldForNewAffirmation() {
+    _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
+
+    // IMPORTANT: Do this BEFORE the UI shows the next affirmation, so any late
+    // partial/final callbacks are ignored immediately (no “I am” carry-over).
+    _armMicIgnoreWindow();
+
+    notifyListeners();
   }
 
   /// Call once from the page. Initializes camera (best-effort) and starts session.
@@ -151,9 +160,7 @@ class SessionController extends ChangeNotifier {
     _micNeedsRestart = false;
     _listenTimedOut = false;
 
-    _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-    _armMicIgnoreWindow(); // avoid instant carry-over on session start
-    notifyListeners();
+    _resetMatcherAndShieldForNewAffirmation(); // includes ignore window
 
     await WakelockPlus.enable();
 
@@ -184,9 +191,7 @@ class SessionController extends ChangeNotifier {
       if (_phase != SessionPhase.live) return;
       if (_shouldIgnoreMicResult()) return;
 
-      if (debugMic) {
-        debugPrint('[mic][partial] $text');
-      }
+      if (debugMic) debugPrint('[mic][partial] $text');
 
       final spokenTokens = _speechMatcher.tokenizeSpeech(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
@@ -197,9 +202,7 @@ class SessionController extends ChangeNotifier {
       if (_phase != SessionPhase.live) return;
       if (_shouldIgnoreMicResult()) return;
 
-      if (debugMic) {
-        debugPrint('[mic][final] $text');
-      }
+      if (debugMic) debugPrint('[mic][final] $text');
 
       final spokenTokens = _speechMatcher.tokenizeSpeech(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
@@ -221,7 +224,6 @@ class SessionController extends ChangeNotifier {
       if (_phase != SessionPhase.live) return;
       if (debugMic) debugPrint('[mic][state] $s');
 
-      // If we’re live and fell back to ready (not listening), softly re-start.
       if (s == MicState.ready && !_mic.isListening) {
         _restartListeningSoon();
       }
@@ -290,17 +292,26 @@ class SessionController extends ChangeNotifier {
 
   // ---- UPDATED: round-robin affirmations across 3 rounds ----
   // Order: A1, A2, A3, A1, A2, A3, A1, A2, A3
+  //
+  // ---- UPDATED: remove transition delay/jank ----
+  // Immediately reset matcher + shield, and also briefly ignore late mic events.
   void _advanceAffirmation() {
     if (_affirmations.isEmpty) return;
 
-    // Move to next affirmation
+    // Prevent double-advances if multiple finals arrive close together.
+    _advanceTimer?.cancel();
+    _advanceTimer = null;
+
+    if (_phase != SessionPhase.live) return;
+
+    // Move to next affirmation index (within the same round)
     final nextIdx = _currentAffIdx + 1;
 
     if (nextIdx < _affirmations.length) {
       _currentAffIdx = nextIdx;
-      _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-      _armMicIgnoreWindow(); // prevents "I am" carry-over
-      notifyListeners();
+
+      // Apply the reset + ignore window immediately (no UI “gray out” lag).
+      _resetMatcherAndShieldForNewAffirmation();
       return;
     }
 
@@ -310,9 +321,8 @@ class SessionController extends ChangeNotifier {
     if (nextRound < kRepsPerAffirmation) {
       _currentAffRep = nextRound;
       _currentAffIdx = 0;
-      _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-      _armMicIgnoreWindow();
-      notifyListeners();
+
+      _resetMatcherAndShieldForNewAffirmation();
       return;
     }
 
@@ -325,6 +335,8 @@ class SessionController extends ChangeNotifier {
 
     _ticker?.cancel();
     _listenTimeoutTimer?.cancel();
+    _advanceTimer?.cancel();
+    _advanceTimer = null;
 
     await _mic.stop();
     await WakelockPlus.disable();
@@ -383,6 +395,9 @@ class SessionController extends ChangeNotifier {
   Future<void> abort() async {
     _ticker?.cancel();
     _listenTimeoutTimer?.cancel();
+    _advanceTimer?.cancel();
+    _advanceTimer = null;
+
     await _mic.stop();
     await WakelockPlus.disable();
   }
@@ -412,6 +427,7 @@ class SessionController extends ChangeNotifier {
   void dispose() {
     _ticker?.cancel();
     _listenTimeoutTimer?.cancel();
+    _advanceTimer?.cancel();
 
     _partialSub?.cancel();
     _finalSub?.cancel();
