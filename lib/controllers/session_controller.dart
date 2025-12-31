@@ -265,7 +265,7 @@ class SessionController extends ChangeNotifier {
           partialResults: true,
           cancelOnError: false,
           listenFor: const Duration(minutes: 10),
-          pauseFor: const Duration(seconds: 6),
+          pauseFor: const Duration(seconds: 3),
         );
       }
     } catch (e) {
