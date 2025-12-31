@@ -147,8 +147,8 @@ class _NewSessionPageState extends State<NewSessionPage>
             fit: StackFit.expand,
             children: [
               SessionCameraPreview(
-                controller: _controller.cameraController,
-                initFuture: _controller.cameraInitFuture,
+                controller: _cameraService.controller,
+                initFuture: _cameraService.initFuture,
                 warmingUp: _controller.cameraWarmingUp,
               ),
               SessionOverlay(
