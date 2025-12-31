@@ -48,30 +48,36 @@ class MicService {
   }
 
   void _log(String msg) {
-    // This prints to "flutter run" terminal as `flutter: ...`
     debugPrint('[mic] $msg');
   }
 
-  Future<void> _configureIosAudioSessionIfNeeded({required bool debugLogging}) async {
+  int _iosCategoryOptionsBitmask() {
+    // audio_session expects an *int bitmask* here (NOT a list).
+    // Keep this conservative for STT + AirPods/HFP:
+    // - defaultToSpeaker: avoids routing issues
+    // - allowBluetooth: supports Bluetooth HFP devices (AirPods, car, etc.)
+    // - mixWithOthers: optional, avoids hard-stopping other audio
+    //
+    // NOTE: allowBluetoothA2DP is not available in your version and is often
+    // not appropriate for playAndRecord anyway.
+    return AVAudioSessionCategoryOptions.defaultToSpeaker |
+        AVAudioSessionCategoryOptions.allowBluetooth |
+        AVAudioSessionCategoryOptions.mixWithOthers;
+  }
+
+  Future<void> _configureIosAudioSessionIfNeeded({
+    required bool debugLogging,
+  }) async {
     if (kIsWeb) return;
     if (!Platform.isIOS) return;
 
     try {
       final session = await AudioSession.instance;
 
-      // Good defaults for STT:
-      // - playAndRecord + defaultToSpeaker so speaker output doesn’t break input routing
-      // - allowBluetooth so AirPods etc work
-      // - spokenAudio mode improves voice processing
       await session.configure(
         AudioSessionConfiguration(
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions: const AVAudioSessionCategoryOptions([
-            AVAudioSessionCategoryOptions.defaultToSpeaker,
-            AVAudioSessionCategoryOptions.allowBluetooth,
-            AVAudioSessionCategoryOptions.allowBluetoothA2DP,
-            AVAudioSessionCategoryOptions.mixWithOthers,
-          ]),
+          avAudioSessionCategoryOptions: _iosCategoryOptionsBitmask(),
           avAudioSessionMode: AVAudioSessionMode.spokenAudio,
           androidAudioAttributes: const AndroidAudioAttributes(
             usage: AndroidAudioUsage.voiceCommunication,
