@@ -1,8 +1,9 @@
-import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
 
+/// CameraService is responsible for camera selection + lifecycle.
+/// It does NOT know about UI or session timing.
 class CameraService {
   CameraController? _controller;
   Future<void>? _initFuture;
@@ -11,16 +12,27 @@ class CameraService {
   Future<void>? get initFuture => _initFuture;
 
   bool get isInitialized => _controller?.value.isInitialized == true;
+  bool get isAvailable => _controller != null;
 
-  Future<void> init() async {
+  /// Initialize camera once and keep a stable initFuture.
+  /// Safe to call multiple times.
+  Future<void> init() {
+    _initFuture ??= _initImpl();
+    return _initFuture!;
+  }
+
+  Future<void> _initImpl() async {
     final cams = await availableCameras();
+    if (cams.isEmpty) {
+      _controller = null;
+      return;
+    }
 
     final cam = cams.firstWhere(
       (c) => c.lensDirection == CameraLensDirection.front,
       orElse: () => cams.first,
     );
 
-    // Start high, fall back if device can’t handle it.
     const desiredPresets = <ResolutionPreset>[
       ResolutionPreset.ultraHigh,
       ResolutionPreset.veryHigh,
@@ -44,10 +56,7 @@ class CameraService {
               Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
         );
 
-        final init = controller.initialize();
-        _initFuture = init;
-        await init;
-
+        await controller.initialize();
         _controller = controller;
         lastErr = null;
         break;
@@ -56,7 +65,7 @@ class CameraService {
       }
     }
 
-    if (lastErr != null && _controller == null) {
+    if (_controller == null && lastErr != null) {
       throw lastErr;
     }
 
@@ -76,7 +85,6 @@ class CameraService {
       final targetZoom = (minZoom + 0.35).clamp(minZoom, maxZoom);
       await c.setZoomLevel(targetZoom);
 
-      // Lock after a beat for stability.
       await Future.delayed(const Duration(milliseconds: 300));
       try {
         await c.setFocusMode(FocusMode.locked);

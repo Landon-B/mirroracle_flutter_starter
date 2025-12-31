@@ -40,15 +40,26 @@ class SessionController extends ChangeNotifier {
   CameraService get camera => _camera;
   MicService get mic => _mic;
 
-  // streams
+  // camera state (SOLID: controller is single source of truth for view-model)
+  bool _cameraWarmingUp = true;
+  bool get cameraWarmingUp => _cameraWarmingUp;
+
+  bool get cameraAvailable => _camera.isAvailable;
+  bool get cameraReady => _camera.isInitialized;
+
+  CameraController? get cameraController => _camera.controller;
+  Future<void>? get cameraInitFuture => _camera.initFuture;
+
+  // one-shot navigation events
   final _navCtrl = StreamController<SessionNavEvent>.broadcast();
   Stream<SessionNavEvent> get navEvents$ => _navCtrl.stream;
 
-  // state
+  // session state
   SessionPhase _phase = SessionPhase.idle;
   SessionPhase get phase => _phase;
 
   static const int kTargetSeconds = 90;
+
   int _elapsed = 0;
   int get elapsed => _elapsed;
 
@@ -88,17 +99,42 @@ class SessionController extends ChangeNotifier {
   StreamSubscription<String>? _finalSub;
   StreamSubscription<Object>? _errSub;
 
-  bool _disposed = false;
+  bool _started = false;
+
+  /// Call once from the page. This initializes camera and starts session.
+  Future<void> initAndStart() async {
+    if (_started) return;
+    _started = true;
+
+    _cameraWarmingUp = true;
+    notifyListeners();
+
+    // Kick off camera init, but don't block session forever if it fails.
+    try {
+      await _camera.init();
+    } catch (_) {
+      // camera stays unavailable; session still runs
+    } finally {
+      _cameraWarmingUp = false;
+      notifyListeners();
+    }
+
+    await start();
+  }
 
   Future<void> start() async {
     _setPhase(SessionPhase.live);
+
     _elapsed = 0;
     _presenceSeconds = 0;
     _startedAt = DateTime.now().toUtc();
+
     _currentAffIdx = 0;
     _currentAffRep = 0;
+
     _micNeedsRestart = false;
     _listenTimedOut = false;
+
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
 
     notifyListeners();
@@ -127,6 +163,7 @@ class SessionController extends ChangeNotifier {
 
     _partialSub = _mic.partialText$.listen((text) {
       if (_phase != SessionPhase.live) return;
+
       final spokenTokens = _speechMatcher.tokenizeSpeech(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
       if (changed) notifyListeners();
@@ -139,13 +176,10 @@ class SessionController extends ChangeNotifier {
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
       if (changed) notifyListeners();
 
-      if (_speechMatcher.isComplete) {
-        _advanceAffirmation();
-      }
+      if (_speechMatcher.isComplete) _advanceAffirmation();
     });
 
     _errSub = _mic.errors$.listen((_) {
-      // Keep it resilient; UI already has a restart affordance.
       if (_phase != SessionPhase.live) return;
       _restartListeningSoon();
     });
@@ -192,11 +226,9 @@ class SessionController extends ChangeNotifier {
   }
 
   void _restartListeningSoon() {
-    Future.delayed(const Duration(milliseconds: 200), () {
+    Future.delayed(const Duration(milliseconds: 250), () {
       if (_phase != SessionPhase.live) return;
-      if (!_mic.isListening && !_micNeedsRestart) {
-        _listen();
-      }
+      if (!_mic.isListening && !_micNeedsRestart) _listen();
     });
   }
 
@@ -205,7 +237,7 @@ class SessionController extends ChangeNotifier {
     try {
       if (_mic.isListening) await _mic.stop();
     } catch (_) {}
-    _listen(); // reset listenFor timer per affirmation
+    _listen();
   }
 
   void _advanceAffirmation() {
@@ -250,6 +282,7 @@ class SessionController extends ChangeNotifier {
       final endedAt = DateTime.now().toUtc();
       final localDate = (_startedAt ?? endedAt).toLocal();
       final duration = _elapsed;
+
       final presenceScore =
           (_presenceSeconds / (duration == 0 ? 1 : duration)).clamp(0.0, 1.0);
 
@@ -272,7 +305,6 @@ class SessionController extends ChangeNotifier {
       _setPhase(SessionPhase.done);
       notifyListeners();
 
-      // One-shot nav event
       _navCtrl.add(
         NavigateToSummary(
           SessionSummaryData(
@@ -298,19 +330,17 @@ class SessionController extends ChangeNotifier {
     WakelockPlus.disable();
   }
 
-  void _setPhase(SessionPhase p) {
-    _phase = p;
-  }
-
   void onPaused() {
+    _camera.pausePreview();
     _mic.stop();
   }
 
   void onResumed() {
-    if (_phase == SessionPhase.live && !_mic.isListening) {
-      _listen();
-    }
+    _camera.resumePreview();
+    if (_phase == SessionPhase.live && !_mic.isListening) _listen();
   }
+
+  void _setPhase(SessionPhase p) => _phase = p;
 
   String _formatLocalDate(DateTime dt) {
     final y = dt.year.toString().padLeft(4, '0');
@@ -321,7 +351,6 @@ class SessionController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _disposed = true;
     _ticker?.cancel();
     _listenTimeoutTimer?.cancel();
 
