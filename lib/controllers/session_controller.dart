@@ -1,4 +1,3 @@
-// lib/controllers/session_controller.dart
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -26,6 +25,7 @@ class SessionController extends ChangeNotifier {
     required CameraService camera,
     required MicService mic,
     required List<String> initialAffirmations,
+    this.debugMic = false,
   })  : _camera = camera,
         _mic = mic,
         _affirmations = initialAffirmations.isNotEmpty
@@ -34,20 +34,17 @@ class SessionController extends ChangeNotifier {
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
   }
 
-  void _dbg(String msg) {
-  if (kDebugMode) {
-    debugPrint('[SESSION] $msg');
-  }
-}
-
   // deps
   final CameraService _camera;
   final MicService _mic;
 
+  // Toggle to print recognized speech
+  final bool debugMic;
+
   CameraService get camera => _camera;
   MicService get mic => _mic;
 
-  // camera state (view-model)
+  // camera state (controller as view-model)
   bool _cameraWarmingUp = true;
   bool get cameraWarmingUp => _cameraWarmingUp;
 
@@ -102,11 +99,11 @@ class SessionController extends ChangeNotifier {
   StreamSubscription<String>? _partialSub;
   StreamSubscription<String>? _finalSub;
   StreamSubscription<Object>? _errSub;
-  StreamSubscription<MicState>? _micStateSub;
+  StreamSubscription<MicState>? _stateSub;
 
   bool _started = false;
 
-  /// Call once from the page. This initializes camera and starts session.
+  /// Call once from the page. Initializes camera (best-effort) and starts session.
   Future<void> initAndStart() async {
     if (_started) return;
     _started = true;
@@ -138,12 +135,11 @@ class SessionController extends ChangeNotifier {
 
     _micNeedsRestart = false;
     _listenTimedOut = false;
-    _status = null;
 
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-
     notifyListeners();
-    WakelockPlus.enable();
+
+    await WakelockPlus.enable();
 
     await _wireMic();
     await _ensureMicReadyAndListen();
@@ -161,46 +157,58 @@ class SessionController extends ChangeNotifier {
     });
   }
 
-  // ---------------- MIC WIRING ----------------
-
+  /// IMPORTANT: Wire subscriptions once per session start, and guard by phase.
   Future<void> _wireMic() async {
     await _partialSub?.cancel();
     await _finalSub?.cancel();
     await _errSub?.cancel();
-    await _micStateSub?.cancel();
+    await _stateSub?.cancel();
 
-    _dbg('Mic wired');
-
-    _micStateSub = _mic.state$.listen((s) {
-      _dbg('Mic state → $s');
+    _partialSub = _mic.partialText$.listen((text) {
       if (_phase != SessionPhase.live) return;
 
-      if (s == MicState.ready && !_mic.isListening && !_micNeedsRestart) {
-        _dbg('Mic returned to READY unexpectedly → restarting');
-        _restartListeningSoon();
+      if (debugMic) {
+        // Partial results can be very frequent; keep it readable.
+        debugPrint('[mic][partial] $text');
+      }
+
+      final spokenTokens = _speechMatcher.tokenizeSpeech(text);
+      final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
+      if (changed) notifyListeners();
+    });
+
+    _finalSub = _mic.finalText$.listen((text) {
+      if (_phase != SessionPhase.live) return;
+
+      if (debugMic) {
+        debugPrint('[mic][final] $text');
+      }
+
+      final spokenTokens = _speechMatcher.tokenizeSpeech(text);
+      final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
+      if (changed) notifyListeners();
+
+      if (_speechMatcher.isComplete) {
+        _advanceAffirmation();
       }
     });
 
-    _partialSub = _mic.partialText$.listen((raw) {
+    _errSub = _mic.errors$.listen((err) {
       if (_phase != SessionPhase.live) return;
-
-      _dbg('PARTIAL (raw): "$raw"');
-      _applySpeech(raw, allowAdvance: false);
-    });
-
-    _finalSub = _mic.finalText$.listen((raw) {
-      if (_phase != SessionPhase.live) return;
-
-      _dbg('FINAL (raw): "$raw"');
-      _applySpeech(raw, allowAdvance: true);
-    });
-
-    _errSub = _mic.errors$.listen((e) {
-      _dbg('Mic error: $e');
-      if (_phase != SessionPhase.live) return;
-      _micNeedsRestart = true;
-      notifyListeners();
+      if (debugMic) debugPrint('[mic][error] $err');
       _restartListeningSoon();
+    });
+
+    // If the plugin transitions out of listening (pause/stop), we can recover.
+    _stateSub = _mic.state$.listen((s) {
+      if (_phase != SessionPhase.live) return;
+      if (debugMic) debugPrint('[mic][state] $s');
+
+      // If we’re live but not listening, and we didn't intentionally pause it,
+      // attempt a soft restart.
+      if (s == MicState.ready && !_micNeedsRestart && !_mic.isListening) {
+        _restartListeningSoon();
+      }
     });
   }
 
@@ -211,79 +219,30 @@ class SessionController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    await _listen(resetMatcher: false);
+    _listen();
   }
 
-  /// Normalize STT text (fixes common iOS contractions like "I'm" => "I am").
-  String _normalizeSpeechText(String s) {
-    var t = s.trim();
-
-    // Common contraction fixes for your affirmations (huge for "I am ...")
-    // Do this BEFORE the matcher strips apostrophes, otherwise "I'm" becomes "im".
-    t = t.replaceAll(RegExp(r"\b(i['’]m)\b", caseSensitive: false), "I am");
-    t = t.replaceAll(RegExp(r"\b(i['’]ve)\b", caseSensitive: false), "I have");
-    t = t.replaceAll(RegExp(r"\b(i['’]ll)\b", caseSensitive: false), "I will");
-    t = t.replaceAll(RegExp(r"\b(i['’]d)\b", caseSensitive: false), "I would");
-
-    return t;
-  }
-
-  void _applySpeech(String raw, {required bool allowAdvance}) {
-    final normalized = _normalizeSpeechText(raw);
-
-    _dbg('Normalized: "$normalized"');
-
-    final spokenTokens = _speechMatcher.tokenizeSpeech(normalized);
-    _dbg('Tokens: $spokenTokens');
-
-    final before = _speechMatcher.activeToken;
-    final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
-    final after = _speechMatcher.activeToken;
-
-    if (changed) {
-      _dbg(
-        'Matcher advanced: $before → $after '
-        '(target=${_speechMatcher.tokens})',
-      );
-      notifyListeners();
-    }
-
-    if (allowAdvance && _speechMatcher.isComplete) {
-      _dbg('Affirmation COMPLETE');
-      _advanceAffirmation();
-    }
-  }
-
-  // ---------------- LISTEN LOOP ----------------
-
-  Future<void> _listen({required bool resetMatcher}) async {
+  /// More resilient listen:
+  /// - hard-stop before starting (prevents "already listening" weirdness)
+  /// - longer pauseFor so iOS gets a stable final result
+  /// - listen timeout triggers micNeedsRestart
+  void _listen() async {
     if (_phase != SessionPhase.live) return;
-
-    _dbg('Starting mic listen (resetMatcher=$resetMatcher)');
 
     _listenTimeoutTimer?.cancel();
     _listenTimedOut = false;
     _micNeedsRestart = false;
-
-    if (resetMatcher) {
-      _dbg('Resetting matcher for "${_affirmations[_currentAffIdx]}"');
-      _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
-    }
-
     notifyListeners();
 
+    // Defensive stop to ensure a clean listen session.
     try {
       if (_mic.isListening) {
-        _dbg('Stopping existing mic session');
         await _mic.stop();
-      } else {
-        await _mic.cancel();
       }
     } catch (_) {}
 
     _listenTimeoutTimer = Timer(const Duration(minutes: 10), () {
       if (_phase != SessionPhase.live) return;
-      _dbg('Mic listen timeout');
       _listenTimedOut = true;
       _micNeedsRestart = true;
       notifyListeners();
@@ -295,11 +254,10 @@ class SessionController extends ChangeNotifier {
         partialResults: true,
         cancelOnError: false,
         listenFor: const Duration(minutes: 10),
-        pauseFor: const Duration(seconds: 1),
+        pauseFor: const Duration(seconds: 2),
       );
-      _dbg('Mic listening started');
     } catch (e) {
-      _dbg('Mic start failed: $e');
+      if (debugMic) debugPrint('[mic][listen start failed] $e');
       _micNeedsRestart = true;
       notifyListeners();
     }
@@ -308,24 +266,25 @@ class SessionController extends ChangeNotifier {
   void onMicTap() {
     if (_phase != SessionPhase.live) return;
     if (!_micNeedsRestart) return;
-    _listen(resetMatcher: false);
+    _listen();
   }
 
   void _restartListeningSoon() {
-    Future.delayed(const Duration(milliseconds: 250), () {
+    Future.delayed(const Duration(milliseconds: 300), () {
       if (_phase != SessionPhase.live) return;
       if (!_mic.isListening && !_micNeedsRestart) {
-        _listen(resetMatcher: false);
+        _listen();
       }
     });
   }
 
   Future<void> restartListeningForNewAffirmation() async {
     if (_phase != SessionPhase.live) return;
-    await _listen(resetMatcher: true);
+    try {
+      if (_mic.isListening) await _mic.stop();
+    } catch (_) {}
+    _listen();
   }
-
-  // ---------------- AFFIRMATION ADVANCE ----------------
 
   void _advanceAffirmation() {
     if (_affirmations.isEmpty) return;
@@ -351,15 +310,14 @@ class SessionController extends ChangeNotifier {
     restartListeningForNewAffirmation();
   }
 
-  // ---------------- FINISH / ABORT ----------------
-
   Future<void> finish() async {
     if (_phase == SessionPhase.saving || _phase == SessionPhase.done) return;
 
     _ticker?.cancel();
     _listenTimeoutTimer?.cancel();
+
     await _mic.stop();
-    WakelockPlus.disable();
+    await WakelockPlus.disable();
 
     _setPhase(SessionPhase.saving);
     notifyListeners();
@@ -416,10 +374,9 @@ class SessionController extends ChangeNotifier {
     _ticker?.cancel();
     _listenTimeoutTimer?.cancel();
     await _mic.stop();
-    WakelockPlus.disable();
+    await WakelockPlus.disable();
   }
 
-  // lifecycle
   void onPaused() {
     _camera.pausePreview();
     _mic.stop();
@@ -428,11 +385,10 @@ class SessionController extends ChangeNotifier {
   void onResumed() {
     _camera.resumePreview();
     if (_phase == SessionPhase.live && !_mic.isListening) {
-      _listen(resetMatcher: false);
+      _listen();
     }
   }
 
-  // helpers
   void _setPhase(SessionPhase p) => _phase = p;
 
   String _formatLocalDate(DateTime dt) {
@@ -450,7 +406,7 @@ class SessionController extends ChangeNotifier {
     _partialSub?.cancel();
     _finalSub?.cancel();
     _errSub?.cancel();
-    _micStateSub?.cancel();
+    _stateSub?.cancel();
 
     _navCtrl.close();
     super.dispose();
