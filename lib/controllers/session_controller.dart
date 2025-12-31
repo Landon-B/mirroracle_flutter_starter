@@ -47,9 +47,6 @@ class SessionController extends ChangeNotifier {
   bool get cameraAvailable => _camera.isAvailable;
   bool get cameraReady => _camera.isInitialized;
 
-  CameraController? get cameraController => _camera.controller;
-  Future<void>? get cameraInitFuture => _camera.initFuture;
-
   // one-shot navigation events
   final _navCtrl = StreamController<SessionNavEvent>.broadcast();
   Stream<SessionNavEvent> get navEvents$ => _navCtrl.stream;
