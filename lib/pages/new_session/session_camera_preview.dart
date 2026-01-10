@@ -64,40 +64,16 @@ class SessionCameraPreview extends StatelessWidget {
 
         final preview = AspectRatio(
           aspectRatio: portraitAspect,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final maxW = constraints.maxWidth;
-              final maxH = constraints.maxHeight;
-              if (maxW == 0 || maxH == 0) {
-                return const SizedBox.shrink();
-              }
-
-              final containerAspect = maxW / maxH;
-              double childW;
-              double childH;
-              if (containerAspect > sensorAspectPortrait) {
-                childW = maxW;
-                childH = maxW / sensorAspectPortrait;
-              } else {
-                childH = maxH;
-                childW = maxH * sensorAspectPortrait;
-              }
-
-              if (cameraScale != 1.0) {
-                childW *= cameraScale;
-                childH *= cameraScale;
-              }
-
-              return ClipRect(
-                child: Center(
-                  child: SizedBox(
-                    width: childW,
-                    height: childH,
-                    child: camera,
-                  ),
-                ),
-              );
-            },
+          child: ClipRect(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+              child: SizedBox(
+                width: (previewSize?.height ?? 720) * cameraScale,
+                height: (previewSize?.width ?? 1280) * cameraScale,
+                child: camera,
+              ),
+            ),
           ),
         );
 
