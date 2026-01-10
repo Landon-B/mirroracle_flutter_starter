@@ -257,7 +257,7 @@ class _HomePageState extends State<HomePage> {
       transitionDuration: const Duration(milliseconds: 280),
       pageBuilder: (_, __, ___) {
         return ProfileOverlay(
-          streakDays: _streak?.currentStreakDays ?? 0,
+          activeDates: _streak?.activeDates ?? const {},
           loadingStreak: _loadingStreak,
         );
       },
@@ -330,7 +330,7 @@ class _HomePageState extends State<HomePage> {
                         duration: const Duration(milliseconds: 250),
                         opacity: _streakBarVisible ? 1 : 0,
                         child: StreakBar(
-                          streakDays: _streak?.currentStreakDays ?? 0,
+                          activeDates: _streak?.activeDates ?? const {},
                           loading: _loadingStreak,
                         ),
                       ),

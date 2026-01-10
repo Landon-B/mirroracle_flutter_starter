@@ -6,11 +6,11 @@ import '../widgets/streak_bar.dart';
 class ProfileOverlay extends StatelessWidget {
   const ProfileOverlay({
     super.key,
-    required this.streakDays,
+    required this.activeDates,
     required this.loadingStreak,
   });
 
-  final int streakDays;
+  final Set<DateTime> activeDates;
   final bool loadingStreak;
 
   @override
@@ -53,7 +53,7 @@ class ProfileOverlay extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: StreakBar(
-                streakDays: streakDays,
+                activeDates: activeDates,
                 loading: loadingStreak,
               ),
             ),

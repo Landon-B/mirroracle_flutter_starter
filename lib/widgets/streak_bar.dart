@@ -3,20 +3,21 @@ import 'package:flutter/material.dart';
 class StreakBar extends StatelessWidget {
   const StreakBar({
     super.key,
-    required this.streakDays,
+    required this.activeDates,
     required this.loading,
   });
 
-  final int streakDays;
+  final Set<DateTime> activeDates;
   final bool loading;
 
   @override
   Widget build(BuildContext context) {
-    final today = DateTime.now();
+    final today = _dayOnly(DateTime.now());
     final days = List.generate(
       7,
       (i) => today.subtract(Duration(days: 6 - i)),
     );
+    final weeklyActiveDays = days.where(activeDates.contains).length;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -51,7 +52,7 @@ class StreakBar extends StatelessWidget {
                     ),
                   )
                 : Text(
-                    '$streakDays',
+                    '$weeklyActiveDays',
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
@@ -63,10 +64,7 @@ class StreakBar extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: days.map((day) {
-                final inStreak =
-                    today.difference(day).inDays < streakDays &&
-                        streakDays > 0;
-                final isToday = _formatDateKey(day) == _formatDateKey(today);
+                final signedIn = activeDates.contains(day);
                 return Column(
                   children: [
                     Text(
@@ -82,16 +80,14 @@ class StreakBar extends StatelessWidget {
                       width: 18,
                       height: 18,
                       decoration: BoxDecoration(
-                        color: inStreak
-                            ? (isToday
-                                ? const Color(0xFFFFB9A8)
-                                : const Color(0xFF6D5854))
+                        color: signedIn
+                            ? const Color(0xFFFFB9A8)
                             : const Color(0xFF3E3331),
                         shape: BoxShape.circle,
                       ),
-                      child: inStreak
-                          ? Icon(
-                              isToday ? Icons.favorite : Icons.check,
+                      child: signedIn
+                          ? const Icon(
+                              Icons.check,
                               size: 12,
                               color: Colors.black,
                             )
@@ -112,10 +108,5 @@ class StreakBar extends StatelessWidget {
     return names[(date.weekday - 1) % 7];
   }
 
-  String _formatDateKey(DateTime dt) {
-    final y = dt.year.toString().padLeft(4, '0');
-    final m = dt.month.toString().padLeft(2, '0');
-    final d = dt.day.toString().padLeft(2, '0');
-    return '$y-$m-$d';
-  }
+  DateTime _dayOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 }

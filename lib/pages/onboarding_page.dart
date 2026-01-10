@@ -117,7 +117,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                             setState(() => _carouselIndex = value),
                         children: [
                           _simpleSlide(
-                            title: 'Welcome to Mirroracle',
+                            title: 'Welcome to Mirrorcle',
                             body:
                                 'Discover the power of mirror affirmations — the practice of speaking positive, intentional statements to yourself, while looking at yourself.',
                           ),

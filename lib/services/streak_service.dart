@@ -4,7 +4,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class StreakInfo {
   final int currentStreakDays;
   final int bestStreakDays;
-  StreakInfo({required this.currentStreakDays, required this.bestStreakDays});
+  final Set<DateTime> activeDates;
+  StreakInfo({
+    required this.currentStreakDays,
+    required this.bestStreakDays,
+    required this.activeDates,
+  });
 }
 
 /// Fetch completed sessions for the user and compute:
@@ -52,7 +57,11 @@ Future<StreakInfo> computeStreaks(SupabaseClient client, String userId) async {
   }
 
   if (dateSet.isEmpty) {
-    return StreakInfo(currentStreakDays: 0, bestStreakDays: 0);
+    return StreakInfo(
+      currentStreakDays: 0,
+      bestStreakDays: 0,
+      activeDates: const {},
+    );
   }
 
   // Best streak: scan all sorted days for longest consecutive run
@@ -78,5 +87,9 @@ Future<StreakInfo> computeStreaks(SupabaseClient client, String userId) async {
     cursor = cursor.subtract(const Duration(days: 1));
   }
 
-  return StreakInfo(currentStreakDays: current, bestStreakDays: best);
+  return StreakInfo(
+    currentStreakDays: current,
+    bestStreakDays: best,
+    activeDates: Set<DateTime>.unmodifiable(dateSet),
+  );
 }
