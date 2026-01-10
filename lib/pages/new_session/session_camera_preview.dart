@@ -62,31 +62,42 @@ class SessionCameraPreview extends StatelessWidget {
           );
         }
 
-        // Optional tiny zoom to feel more "centered" and avoid pillarboxing
-        if (cameraScale != 1.0) {
-          camera = Transform.scale(
-            scale: cameraScale,
-            alignment: Alignment.center,
-            child: camera,
-          );
-        }
-
-        // This pattern:
-        // - Outer AspectRatio = your “card” shape (portraitAspect)
-        // - OverflowBox + inner AspectRatio = center-crop the camera feed
         final preview = AspectRatio(
           aspectRatio: portraitAspect,
-          child: ClipRect(
-            child: OverflowBox(
-              alignment: Alignment.center,
-              // Let the camera preview be as big as it wants; we’ll crop from center.
-              maxWidth: double.infinity,
-              maxHeight: double.infinity,
-              child: AspectRatio(
-                aspectRatio: sensorAspectPortrait,
-                child: camera,
-              ),
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final maxW = constraints.maxWidth;
+              final maxH = constraints.maxHeight;
+              if (maxW == 0 || maxH == 0) {
+                return const SizedBox.shrink();
+              }
+
+              final containerAspect = maxW / maxH;
+              double childW;
+              double childH;
+              if (containerAspect > sensorAspectPortrait) {
+                childW = maxW;
+                childH = maxW / sensorAspectPortrait;
+              } else {
+                childH = maxH;
+                childW = maxH * sensorAspectPortrait;
+              }
+
+              if (cameraScale != 1.0) {
+                childW *= cameraScale;
+                childH *= cameraScale;
+              }
+
+              return ClipRect(
+                child: Center(
+                  child: SizedBox(
+                    width: childW,
+                    height: childH,
+                    child: camera,
+                  ),
+                ),
+              );
+            },
           ),
         );
 
