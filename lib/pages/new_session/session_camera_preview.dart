@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -9,16 +7,12 @@ class SessionCameraPreview extends StatelessWidget {
     required this.controller,
     required this.initFuture,
     required this.warmingUp,
-    this.portraitAspect = 3 / 4, // frame aspect (UI crop), e.g. 3:4
-    this.cameraScale = 1.05,     // slight zoom-in so we avoid black bars
+    this.cameraScale = 1.08,     // slight zoom-in to match Snapchat-style crop
   });
 
   final CameraController? controller;
   final Future<void>? initFuture;
   final bool warmingUp;
-
-  /// The aspect ratio of the visible frame (portrait card)
-  final double portraitAspect;
 
   /// How much to scale the camera preview inside the crop
   final double cameraScale;
@@ -62,8 +56,7 @@ class SessionCameraPreview extends StatelessWidget {
           );
         }
 
-        final preview = AspectRatio(
-          aspectRatio: portraitAspect,
+        final preview = SizedBox.expand(
           child: ClipRect(
             child: FittedBox(
               fit: BoxFit.cover,
@@ -80,33 +73,7 @@ class SessionCameraPreview extends StatelessWidget {
         return Stack(
           fit: StackFit.expand,
           children: [
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: const Color(0xFFF2D59C), width: 2),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x66F2D59C),
-                        blurRadius: 24,
-                        spreadRadius: 4,
-                      ),
-                      BoxShadow(
-                        color: Color(0x33F8E7C3),
-                        blurRadius: 48,
-                        spreadRadius: 12,
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(22),
-                    child: preview,
-                  ),
-                ),
-              ),
-            ),
+            preview,
 
             // Optional "camera warming up" overlay even after init completes
             AnimatedSwitcher(
