@@ -12,7 +12,6 @@ class SessionOverlay extends StatelessWidget {
     required this.fallbackText,
     required this.micNeedsRestart,
     required this.onMicTap,
-    required this.onShare,
 
     // Favorite
     required this.onFavorite,
@@ -31,8 +30,6 @@ class SessionOverlay extends StatelessWidget {
 
   final bool micNeedsRestart;
   final VoidCallback onMicTap;
-
-  final VoidCallback onShare;
 
   // Favorite
   final VoidCallback onFavorite;
@@ -92,38 +89,18 @@ class SessionOverlay extends StatelessWidget {
                       Material(
                         color: Colors.transparent,
                         child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
-                          onTap: onShare,
-                          child: Ink(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.black45,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.ios_share_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(18),
                           onTap: onClose,
                           child: Ink(
-                            padding: const EdgeInsets.all(6),
+                            padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
                               color: Colors.black45,
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: BorderRadius.circular(18),
                             ),
                             child: const Icon(
                               Icons.close_rounded,
                               color: Colors.white,
-                              size: 18,
+                              size: 22,
                             ),
                           ),
                         ),
