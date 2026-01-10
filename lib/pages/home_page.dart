@@ -11,7 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../services/mic_service.dart'; // ✅ Mic debug page uses this
+import '../services/mic_service.dart';
 import '../services/streak_service.dart';
 import '../widgets/streak_bar.dart';
 import 'new_session_page.dart';
@@ -234,7 +234,11 @@ class _HomePageState extends State<HomePage> {
     setState(() => _loadingStreak = true);
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) return;
+      if (uid == null) {
+        if (!mounted) return;
+        setState(() => _loadingStreak = false);
+        return;
+      }
       final s = await computeStreaks(Supabase.instance.client, uid);
       if (!mounted) return;
       setState(() {
@@ -520,37 +524,16 @@ class _HomePageState extends State<HomePage> {
                                   if (!mounted) return;
                                   _loadAffirmations();
                                 },
-                          icon: const Icon(Icons.self_improvement_outlined),
-                          label: const Text(
-                            'Practice',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-
-                      // ✅ TEMP DEBUG BUTTON
-                      SizedBox(
-                        height: 56,
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF2F2624),
-                            side: const BorderSide(color: Color(0xFF2F2624)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(28),
-                            ),
-                            padding: const EdgeInsets.symmetric(horizontal: 18),
-                          ),
-                          onPressed: () async {
+                          onLongPress: () async {
                             await Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => const _MicDebugPage(),
                               ),
                             );
                           },
-                          icon: const Icon(Icons.mic_rounded),
+                          icon: const Icon(Icons.self_improvement_outlined),
                           label: const Text(
-                            'Test mic',
+                            'Practice',
                             style: TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -613,9 +596,7 @@ class _AffirmationItem {
   }
 }
 
-/// ✅ Temporary in-app mic test screen.
-/// If this page prints partial/final results, your MicService is fine and the issue is in NewSession wiring.
-/// If it prints nothing, the issue is deeper (plugin/permissions/audio session).
+/// Hidden mic debug screen (long-press Practice to open).
 class _MicDebugPage extends StatefulWidget {
   const _MicDebugPage();
 
@@ -645,27 +626,22 @@ class _MicDebugPageState extends State<_MicDebugPage> {
 
     _stateSub = _mic.state$.listen((s) {
       setState(() => _state = s);
-      debugPrint('[mic][state] $s');
     });
 
     _partialSub = _mic.partialText$.listen((t) {
       setState(() => _partial = t);
-      debugPrint('[mic][partial] $t');
     });
 
     _finalSub = _mic.finalText$.listen((t) {
       setState(() => _final = t);
-      debugPrint('[mic][final] $t');
     });
 
     _levelSub = _mic.soundLevel$.listen((v) {
       setState(() => _level = v);
-      // (optional) avoid spamming logs with level
     });
 
     _errSub = _mic.errors$.listen((e) {
       setState(() => _lastErr = e);
-      debugPrint('[mic][error] $e');
     });
 
     _boot();
@@ -673,7 +649,6 @@ class _MicDebugPageState extends State<_MicDebugPage> {
 
   Future<void> _boot() async {
     final ok = await _mic.init(debugLogging: true);
-    debugPrint('[mic][init-debug-page] ok=$ok');
     if (!ok) return;
 
     await _mic.start(
@@ -682,7 +657,6 @@ class _MicDebugPageState extends State<_MicDebugPage> {
       listenFor: const Duration(minutes: 10),
       pauseFor: const Duration(seconds: 6),
     );
-    debugPrint('[mic][start-debug-page] called');
   }
 
   @override
@@ -736,7 +710,6 @@ class _MicDebugPageState extends State<_MicDebugPage> {
                     child: OutlinedButton(
                       onPressed: () async {
                         await _mic.stop();
-                        debugPrint('[mic][debug-page] stop pressed');
                       },
                       child: const Text('Stop'),
                     ),
@@ -751,7 +724,6 @@ class _MicDebugPageState extends State<_MicDebugPage> {
                           listenFor: const Duration(minutes: 10),
                           pauseFor: const Duration(seconds: 1),
                         );
-                        debugPrint('[mic][debug-page] start pressed');
                       },
                       child: const Text('Start'),
                     ),
@@ -765,3 +737,7 @@ class _MicDebugPageState extends State<_MicDebugPage> {
     );
   }
 }
+
+/// ✅ Temporary in-app mic test screen.
+/// If this page prints partial/final results, your MicService is fine and the issue is in NewSession wiring.
+/// If it prints nothing, the issue is deeper (plugin/permissions/audio session).

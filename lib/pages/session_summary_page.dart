@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'home_page.dart';
+import 'profile_overlay.dart';
 import '../services/streak_service.dart';
 
 class SessionSummaryData {
@@ -92,6 +94,35 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
       if (!mounted) return;
       setState(() => _loadingStats = false);
     }
+  }
+
+  void _openProfileOverlay() {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Profile',
+      barrierColor: Colors.black38,
+      transitionDuration: const Duration(milliseconds: 280),
+      pageBuilder: (_, __, ___) {
+        return ProfileOverlay(
+          activeDates: _streak?.activeDates ?? const {},
+          loadingStreak: _loadingStreak,
+        );
+      },
+      transitionBuilder: (_, animation, __, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.08),
+            end: Offset.zero,
+          ).animate(curved),
+          child: FadeTransition(opacity: curved, child: child),
+        );
+      },
+    );
   }
 
   @override
@@ -228,25 +259,41 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
                       ),
                     ),
             ),
-            const SizedBox(height: 24),
-            SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 18,
+                    offset: Offset(0, 8),
                   ),
-                  textStyle: GoogleFonts.manrope(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    onPressed: () {
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const HomePage()),
+                        (route) => false,
+                      );
+                    },
+                    icon: const Icon(Icons.home_rounded, size: 28),
                   ),
-                ),
-                onPressed: () => Navigator.of(context).popUntil(
-                  (route) => route.settings.name == Navigator.defaultRouteName,
-                ),
-                child: const Text('Home'),
+                  IconButton(
+                    onPressed: null,
+                    icon: const Icon(Icons.grid_view_rounded, size: 26),
+                  ),
+                  IconButton(
+                    onPressed: _openProfileOverlay,
+                    icon: const Icon(Icons.person_rounded, size: 28),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),

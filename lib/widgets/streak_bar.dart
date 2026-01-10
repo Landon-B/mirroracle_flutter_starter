@@ -1,6 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
-class StreakBar extends StatelessWidget {
+class StreakBar extends StatefulWidget {
   const StreakBar({
     super.key,
     required this.activeDates,
@@ -11,13 +13,57 @@ class StreakBar extends StatelessWidget {
   final bool loading;
 
   @override
+  State<StreakBar> createState() => _StreakBarState();
+}
+
+class _StreakBarState extends State<StreakBar> {
+  Timer? _revealTimer;
+  bool _showCount = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncLoadingState(initial: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant StreakBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.loading != widget.loading) {
+      _syncLoadingState();
+    }
+  }
+
+  void _syncLoadingState({bool initial = false}) {
+    _revealTimer?.cancel();
+    if (widget.loading || initial) {
+      if (!initial && _showCount) {
+        setState(() => _showCount = false);
+      } else {
+        _showCount = false;
+      }
+    }
+    _revealTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() => _showCount = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _revealTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final today = _dayOnly(DateTime.now());
     final days = List.generate(
       7,
       (i) => today.subtract(Duration(days: 6 - i)),
     );
-    final weeklyActiveDays = days.where(activeDates.contains).length;
+    final weeklyActiveDays = days.where(widget.activeDates.contains).length;
+    final showSpinner = !_showCount;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -42,7 +88,7 @@ class StreakBar extends StatelessWidget {
               border: Border.all(color: const Color(0xFFF2D59C), width: 2),
             ),
             alignment: Alignment.center,
-            child: loading
+            child: showSpinner
                 ? const SizedBox(
                     width: 18,
                     height: 18,
@@ -64,7 +110,7 @@ class StreakBar extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: days.map((day) {
-                final signedIn = activeDates.contains(day);
+                final signedIn = widget.activeDates.contains(day);
                 return Column(
                   children: [
                     Text(

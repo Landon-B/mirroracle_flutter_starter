@@ -187,8 +187,11 @@ class MicService {
   }) async {
     if (_disposed) return;
     if (!_available) {
-      if (debugLogging) _log('[start] ignored: not available');
-      return;
+      final ok = await init(debugLogging: debugLogging, localeId: localeId);
+      if (!ok) {
+        if (debugLogging) _log('[start] ignored: not available');
+        return;
+      }
     }
     if (_state == MicState.listening) {
       if (debugLogging) _log('[start] ignored: already listening');
@@ -223,6 +226,12 @@ class MicService {
     if (_state != MicState.listening) return;
 
     try {
+      if (Platform.isIOS) {
+        try {
+          final session = await AudioSession.instance;
+          await session.setActive(true);
+        } catch (_) {}
+      }
       await _stt.listen(
         listenMode: _listenMode,
         partialResults: _partialResults,
@@ -293,6 +302,13 @@ class MicService {
 
     try {
       await _stt.stop();
+      await _stt.cancel();
+      if (Platform.isIOS) {
+        try {
+          final session = await AudioSession.instance;
+          await session.setActive(false);
+        } catch (_) {}
+      }
     } catch (e) {
       if (debugLogging) _log('[stop] exception: $e');
       if (!_errorCtrl.isClosed) _errorCtrl.add(e);

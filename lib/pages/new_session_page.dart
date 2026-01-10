@@ -7,7 +7,7 @@ import '../controllers/session_controller.dart';
 import '../services/camera_service.dart';
 import '../services/mic_service.dart';
 
-import 'session_summary_page.dart';
+import 'session_complete_page.dart';
 import 'new_session/session_camera_preview.dart';
 import 'new_session/session_overlay.dart';
 
@@ -49,7 +49,7 @@ class _NewSessionPageState extends State<NewSessionPage>
       if (evt is NavigateToSummary) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => SessionSummaryPage(data: evt.data),
+            builder: (_) => SessionCompletePage(data: evt.data),
           ),
         );
       }

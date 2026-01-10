@@ -6,6 +6,7 @@ import 'pages/login_page.dart';
 import 'pages/home_page.dart';
 import 'pages/onboarding_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/camera_service.dart';
 
 const bool kForceOnboardingEveryLaunch = true; // TESTING ONLY
 
@@ -58,6 +59,16 @@ class _AuthGateState extends State<AuthGate> {
   void initState() {
     super.initState();
     _authStream = Supabase.instance.client.auth.onAuthStateChange;
+    _warmUpCamera();
+  }
+
+  Future<void> _warmUpCamera() async {
+    try {
+      final camera = CameraService();
+      final granted = await camera.ensureCameraPermission();
+      if (!granted) return;
+      await camera.warmUp();
+    } catch (_) {}
   }
 
   @override

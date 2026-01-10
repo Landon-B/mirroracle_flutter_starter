@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../widgets/streak_bar.dart';
+import 'favorites_page.dart';
 
 class ProfileOverlay extends StatelessWidget {
   const ProfileOverlay({
@@ -105,8 +106,15 @@ class ProfileOverlay extends StatelessWidget {
                         label: 'Themes',
                       ),
                       right: _tile(
-                        icon: Icons.bubble_chart_outlined,
-                        label: 'Daily prompts',
+                        icon: Icons.favorite_rounded,
+                        label: 'Favorites',
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const FavoritesPage(),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -149,8 +157,12 @@ class ProfileOverlay extends StatelessWidget {
     );
   }
 
-  Widget _tile({required IconData icon, required String label}) {
-    return Container(
+  Widget _tile({
+    required IconData icon,
+    required String label,
+    VoidCallback? onTap,
+  }) {
+    final tile = Container(
       height: 130,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -171,6 +183,17 @@ class ProfileOverlay extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+
+    if (onTap == null) return tile;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: tile,
       ),
     );
   }

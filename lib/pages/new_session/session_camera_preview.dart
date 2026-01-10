@@ -1,6 +1,8 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/camera_service.dart';
+
 class SessionCameraPreview extends StatelessWidget {
   const SessionCameraPreview({
     super.key,
@@ -29,7 +31,7 @@ class SessionCameraPreview extends StatelessWidget {
         final ready =
             snap.connectionState == ConnectionState.done && controller!.value.isInitialized;
 
-        if (!ready) {
+        if (!ready || warmingUp) {
           return const _WarmupView();
         }
 
@@ -57,16 +59,28 @@ class SessionCameraPreview extends StatelessWidget {
         }
 
         final preview = SizedBox.expand(
-          child: ClipRect(
-            child: FittedBox(
-              fit: BoxFit.cover,
-              alignment: Alignment.center,
-              child: SizedBox(
-                width: (previewSize?.height ?? 720) * cameraScale,
-                height: (previewSize?.width ?? 1280) * cameraScale,
-                child: camera,
-              ),
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (details) {
+                  final dx = details.localPosition.dx / constraints.maxWidth;
+                  final dy = details.localPosition.dy / constraints.maxHeight;
+                  CameraService().tapToFocus(Offset(dx, dy));
+                },
+                child: ClipRect(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    child: SizedBox(
+                      width: (previewSize?.height ?? 720) * cameraScale,
+                      height: (previewSize?.width ?? 1280) * cameraScale,
+                      child: camera,
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         );
 
