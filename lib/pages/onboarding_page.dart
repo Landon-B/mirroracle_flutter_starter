@@ -117,20 +117,20 @@ class _OnboardingPageState extends State<OnboardingPage> {
                             setState(() => _carouselIndex = value),
                         children: [
                           _simpleSlide(
-                            title: 'Friendly Reminder',
-                            body:
-                                'You are the miracle,\nand every day is your chance to remember.',
-                          ),
-                          _howItWorksSlide(),
-                          _simpleSlide(
                             title: 'Welcome to Mirroracle',
                             body:
                                 'Discover the power of mirror affirmations — the practice of speaking positive, intentional statements to yourself, while looking at yourself.',
                           ),
+                          _howItWorksSlide(),
                           _simpleSlide(
                             title: 'Why You Benefit',
                             body:
                                 'Mirror affirmations build confidence, quiet self-criticism, and help you feel grounded.\n\nBy pairing eye contact with intention, you shift the way you see yourself from within.',
+                          ),
+                          _simpleSlide(
+                            title: 'Friendly Reminder',
+                            body:
+                                'You are the miracle,\nand every day is your chance to remember.',
                           ),
                         ],
                       )

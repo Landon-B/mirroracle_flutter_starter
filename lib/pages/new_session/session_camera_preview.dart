@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -7,13 +9,19 @@ class SessionCameraPreview extends StatelessWidget {
     required this.controller,
     required this.initFuture,
     required this.warmingUp,
-    this.portraitAspect = 3 / 4,
+    this.portraitAspect = 3 / 4, // frame aspect (UI crop), e.g. 3:4
+    this.cameraScale = 1.05,     // slight zoom-in so we avoid black bars
   });
 
   final CameraController? controller;
   final Future<void>? initFuture;
   final bool warmingUp;
+
+  /// The aspect ratio of the visible frame (portrait card)
   final double portraitAspect;
+
+  /// How much to scale the camera preview inside the crop
+  final double cameraScale;
 
   @override
   Widget build(BuildContext context) {
@@ -31,12 +39,54 @@ class SessionCameraPreview extends StatelessWidget {
           return const _WarmupView();
         }
 
-        final preview = Transform(
-          alignment: Alignment.center,
-          transform: Matrix4.identity()..scale(-1.0, 1.0, 1.0),
-          child: Transform.scale(
-            scale: 1.08,
-            child: CameraPreview(controller!),
+        final value = controller!.value;
+        final previewSize = value.previewSize;
+
+        // Camera plugin reports size in *landscape* (width > height)
+        // We want a portrait aspect ratio for the sensor itself.
+        final double sensorAspectPortrait = (previewSize != null && previewSize.width > 0)
+            ? previewSize.height / previewSize.width
+            : 4 / 3; // sane default
+
+        final bool isFrontCamera =
+            controller!.description.lensDirection == CameraLensDirection.front;
+
+        // Build the raw camera preview, mirroring only if it's the front camera.
+        Widget camera = CameraPreview(controller!);
+
+        if (isFrontCamera) {
+          camera = Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()..scale(-1.0, 1.0, 1.0),
+            child: camera,
+          );
+        }
+
+        // Optional tiny zoom to feel more "centered" and avoid pillarboxing
+        if (cameraScale != 1.0) {
+          camera = Transform.scale(
+            scale: cameraScale,
+            alignment: Alignment.center,
+            child: camera,
+          );
+        }
+
+        // This pattern:
+        // - Outer AspectRatio = your “card” shape (portraitAspect)
+        // - OverflowBox + inner AspectRatio = center-crop the camera feed
+        final preview = AspectRatio(
+          aspectRatio: portraitAspect,
+          child: ClipRect(
+            child: OverflowBox(
+              alignment: Alignment.center,
+              // Let the camera preview be as big as it wants; we’ll crop from center.
+              maxWidth: double.infinity,
+              maxHeight: double.infinity,
+              child: AspectRatio(
+                aspectRatio: sensorAspectPortrait,
+                child: camera,
+              ),
+            ),
           ),
         );
 
@@ -65,24 +115,13 @@ class SessionCameraPreview extends StatelessWidget {
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(22),
-                    child: AspectRatio(
-                      aspectRatio: portraitAspect,
-                      child: FittedBox(
-                        fit: BoxFit.cover,
-                        clipBehavior: Clip.hardEdge,
-                        child: SizedBox(
-                          width: controller!.value.previewSize?.height ?? 1280,
-                          height: controller!.value.previewSize?.width ?? 720,
-                          child: preview,
-                        ),
-                      ),
-                    ),
+                    child: preview,
                   ),
                 ),
               ),
             ),
 
-            // Optional "camera warming up" overlay even after init completes (rare but nice)
+            // Optional "camera warming up" overlay even after init completes
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 250),
               child: warmingUp ? const _WarmupOverlay() : const SizedBox.shrink(),
