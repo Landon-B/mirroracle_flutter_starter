@@ -54,6 +54,8 @@ class MicService {
   String? _startLocaleId;
   bool _cancelOnError = false;
   bool _debugLogging = false;
+  DateTime _lastStatusAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String? _lastStatus;
 
   void _setState(MicState s) {
     _state = s;
@@ -124,12 +126,16 @@ class MicService {
           if (_disposed) return;
           if (debugLogging) _log('[plugin][status] $status');
           if (!_statusCtrl.isClosed) _statusCtrl.add(status);
+          _lastStatus = status;
+          _lastStatusAt = DateTime.now();
 
           // If we are in keep-alive mode, restart on "done"/"notListening".
-          if (_keepAlive && _state == MicState.listening) {
-            final s = status.toLowerCase();
-            if (s == 'done' || s == 'notlistening') {
-              _scheduleRestart(reason: 'status=$status');
+          final s = status.toLowerCase();
+          if (s == 'done' || s == 'notlistening') {
+            if (_keepAlive && _state == MicState.listening) {
+              _scheduleRestart(reason: 'status=$status', force: true);
+            } else if (_state == MicState.listening && !_stt.isListening) {
+              _setState(MicState.ready);
             }
           }
         },
@@ -157,7 +163,7 @@ class MicService {
     }
   }
 
-  void _scheduleRestart({required String reason}) {
+  void _scheduleRestart({required String reason, bool force = false}) {
     if (_disposed) return;
     if (!_keepAlive) return;
 
@@ -169,7 +175,14 @@ class MicService {
       if (_state != MicState.listening) return;
 
       // If the plugin thinks it's still listening, don’t force a restart.
-      if (_stt.isListening) return;
+      if (_stt.isListening && !force) return;
+
+      if (force) {
+        try {
+          await _stt.stop();
+          await _stt.cancel();
+        } catch (_) {}
+      }
 
       if (_debugLogging) _log('[keep-alive] restarting ($reason)…');
       await _startInternal(restarting: true);
@@ -184,6 +197,7 @@ class MicService {
     String? localeId,
     bool cancelOnError = false,
     bool debugLogging = false,
+    bool keepAlive = true,
   }) async {
     if (_disposed) return;
     if (!_available) {
@@ -194,8 +208,11 @@ class MicService {
       }
     }
     if (_state == MicState.listening) {
-      if (debugLogging) _log('[start] ignored: already listening');
-      return;
+      if (_stt.isListening) {
+        if (debugLogging) _log('[start] ignored: already listening');
+        return;
+      }
+      _setState(MicState.ready);
     }
 
     // Save config for restarts.
@@ -207,7 +224,7 @@ class MicService {
     _cancelOnError = cancelOnError;
     _debugLogging = debugLogging;
 
-    _keepAlive = true;
+    _keepAlive = keepAlive;
     _setState(MicState.listening);
 
     _lastPartial = '';

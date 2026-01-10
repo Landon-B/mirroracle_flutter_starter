@@ -161,24 +161,27 @@ class _NewSessionPageState extends State<NewSessionPage>
                   initFuture: _cameraService.initFuture,
                   warmingUp: _controller.cameraWarmingUp,
                 ),
-                SessionOverlay(
-                  showLiveHud: showLiveHud,
-                  showSaving: showSaving,
-                  currentAffIdx: _controller.currentAffIdx,
-                  totalAffirmations: affs.length,
-                  affirmationSpan: _controller.speechMatcher.tokens.isNotEmpty
-                      ? _buildAffirmationSpans(context)
-                      : null,
-                  fallbackText: _capitalizeFirst(currentText),
-                  micNeedsRestart: _controller.micNeedsRestart,
-                  onMicTap: _controller.onMicTap,
-                  onClose: _abortSession,
-                  statusText: _controller.status,
+                if (_controller.cameraReady && !_controller.cameraWarmingUp)
+                  SessionOverlay(
+                    showLiveHud: showLiveHud,
+                    showSaving: showSaving,
+                    currentAffIdx: _controller.currentAffIdx,
+                    totalAffirmations: affs.length,
+                    affirmationSpan: _controller.speechMatcher.tokens.isNotEmpty
+                        ? _buildAffirmationSpans(context)
+                        : null,
+                    fallbackText: _capitalizeFirst(currentText),
+                    micNeedsRestart: _controller.micNeedsRestart,
+                    isMicListening: _controller.isMicListening,
+                    isMicTransitioning: _controller.isMicTransitioning,
+                    onMicTap: _controller.onMicTap,
+                    onClose: _abortSession,
+                    statusText: _controller.status,
 
-                  // ✅ requires the small SessionOverlay patch below
-                  onFavorite: _toggleFavorite,
-                  isFavorited: _controller.isCurrentAffirmationFavorited,
-                ),
+                    // ✅ requires the small SessionOverlay patch below
+                    onFavorite: _toggleFavorite,
+                    isFavorited: _controller.isCurrentAffirmationFavorited,
+                  ),
               ],
             ),
           ),

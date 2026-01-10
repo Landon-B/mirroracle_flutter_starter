@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -31,9 +33,7 @@ class SessionCameraPreview extends StatelessWidget {
         final ready =
             snap.connectionState == ConnectionState.done && controller!.value.isInitialized;
 
-        if (!ready || warmingUp) {
-          return const _WarmupView();
-        }
+        final showLive = ready && !warmingUp;
 
         final value = controller!.value;
         final previewSize = value.previewSize;
@@ -87,8 +87,24 @@ class SessionCameraPreview extends StatelessWidget {
         return Stack(
           fit: StackFit.expand,
           children: [
-            preview,
-
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOutCubic,
+              opacity: showLive ? 1 : 0,
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 8, end: showLive ? 0 : 8),
+                duration: const Duration(milliseconds: 500),
+                curve: Curves.easeOutCubic,
+                builder: (context, sigma, child) {
+                  return ImageFiltered(
+                    imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                    child: child,
+                  );
+                },
+                child: preview,
+              ),
+            ),
+            if (!showLive) const _WarmupView(),
             // Optional "camera warming up" overlay even after init completes
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 250),

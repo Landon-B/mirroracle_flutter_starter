@@ -84,6 +84,9 @@ class SessionController extends ChangeNotifier {
 
   bool _micNeedsRestart = false;
   bool get micNeedsRestart => _micNeedsRestart;
+  bool get isMicListening => _mic.isListening;
+  bool _micTransitioning = false;
+  bool get isMicTransitioning => _micTransitioning;
 
   bool _listenTimedOut = false;
   bool get listenTimedOut => _listenTimedOut;
@@ -109,7 +112,7 @@ class SessionController extends ChangeNotifier {
 
   bool _shouldIgnoreMicResult() => DateTime.now().isBefore(_ignoreMicUntil);
 
-  void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 650)]) {
+  void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 450)]) {
     _ignoreMicUntil = DateTime.now().add(d);
   }
 
@@ -313,6 +316,9 @@ class SessionController extends ChangeNotifier {
       if (changed) notifyListeners();
 
       if (_speechMatcher.isComplete) {
+        _micTransitioning = true;
+        notifyListeners();
+        _mic.stop();
         _advanceAffirmation();
       }
     });
@@ -326,6 +332,8 @@ class SessionController extends ChangeNotifier {
     _stateSub = _mic.state$.listen((s) {
       if (_phase != SessionPhase.live) return;
       if (debugMic) debugPrint('[mic][state] $s');
+
+      notifyListeners();
 
       if (s == MicState.ready && !_mic.isListening) {
         _restartListeningSoon();
@@ -347,6 +355,7 @@ class SessionController extends ChangeNotifier {
   void _listen() async {
     if (_phase != SessionPhase.live) return;
 
+    _micTransitioning = false;
     _listenTimeoutTimer?.cancel();
     _listenTimedOut = false;
     _micNeedsRestart = false;
@@ -367,7 +376,8 @@ class SessionController extends ChangeNotifier {
           partialResults: true,
           cancelOnError: false,
           listenFor: const Duration(minutes: 10),
-          pauseFor: const Duration(seconds: 3),
+          pauseFor: const Duration(seconds: 6),
+          keepAlive: true,
         );
       }
     } catch (e) {
@@ -379,7 +389,7 @@ class SessionController extends ChangeNotifier {
 
   void onMicTap() {
     if (_phase != SessionPhase.live) return;
-    if (!_micNeedsRestart) return;
+    if (_mic.isListening) return;
     _listen();
   }
 
@@ -405,6 +415,7 @@ class SessionController extends ChangeNotifier {
     if (nextIdx < _affirmations.length) {
       _currentAffIdx = nextIdx;
       _resetMatcherAndShieldForNewAffirmation();
+      _restartMicForNextAffirmation();
       return;
     }
 
@@ -414,10 +425,18 @@ class SessionController extends ChangeNotifier {
       _currentAffRep = nextRound;
       _currentAffIdx = 0;
       _resetMatcherAndShieldForNewAffirmation();
+      _restartMicForNextAffirmation();
       return;
     }
 
     finish();
+  }
+
+  void _restartMicForNextAffirmation() {
+    Future.delayed(const Duration(milliseconds: 80), () {
+      if (_phase != SessionPhase.live) return;
+      _listen();
+    });
   }
 
   Future<void> finish() async {
@@ -427,6 +446,7 @@ class SessionController extends ChangeNotifier {
     _listenTimeoutTimer?.cancel();
     _advanceTimer?.cancel();
     _advanceTimer = null;
+    _micTransitioning = false;
 
     await _mic.stop();
     await WakelockPlus.disable();
@@ -487,6 +507,7 @@ class SessionController extends ChangeNotifier {
     _listenTimeoutTimer?.cancel();
     _advanceTimer?.cancel();
     _advanceTimer = null;
+    _micTransitioning = false;
 
     await _mic.stop();
     await WakelockPlus.disable();

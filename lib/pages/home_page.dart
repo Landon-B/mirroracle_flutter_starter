@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../services/mic_service.dart';
 import '../services/streak_service.dart';
@@ -36,18 +37,61 @@ class _HomePageState extends State<HomePage> {
   bool _streakBarVisible = false;
   StreakInfo? _streak;
   bool _loadingStreak = false;
+  bool _showNameOverlay = false;
+  bool _savingName = false;
+  String? _nameError;
+  final TextEditingController _nameController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadAffirmations();
     _checkDailyStreakBar();
+    _checkMissingName();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    _nameController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkMissingName() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    final firstName = user?.userMetadata?['first_name']?.toString().trim();
+    if (firstName == null || firstName.isEmpty) {
+      setState(() => _showNameOverlay = true);
+    }
+  }
+
+  Future<void> _submitMissingName() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      setState(() => _nameError = 'Please enter your first name.');
+      return;
+    }
+    setState(() {
+      _savingName = true;
+      _nameError = null;
+    });
+    try {
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(data: {'first_name': name}),
+      );
+      if (!mounted) return;
+      setState(() {
+        _showNameOverlay = false;
+      });
+    } on AuthException catch (e) {
+      setState(() => _nameError = e.message);
+    } catch (e) {
+      setState(() => _nameError = 'Unexpected error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _savingName = false);
+      }
+    }
   }
 
   Future<void> _loadAffirmations() async {
@@ -544,6 +588,128 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
+          if (_showNameOverlay)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black45,
+                child: Center(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 24),
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF4ECE4),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: const Color(0xFFE5D6CB),
+                        width: 1.2,
+                      ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 24,
+                          offset: Offset(0, 14),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2F2624),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            'TEST MODE',
+                            style: GoogleFonts.manrope(
+                              fontSize: 11,
+                              letterSpacing: 1.2,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Add your first name',
+                          style: GoogleFonts.dmSerifDisplay(
+                            fontSize: 24,
+                            color: const Color(0xFF2F2624),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'This is temporary and only for existing test accounts.',
+                          style: GoogleFonts.manrope(
+                            fontSize: 14,
+                            height: 1.35,
+                            color: const Color(0xFF6B5B52),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        TextField(
+                          controller: _nameController,
+                          textInputAction: TextInputAction.done,
+                          decoration: InputDecoration(
+                            hintText: 'First name',
+                            hintStyle: GoogleFonts.manrope(
+                              color: Colors.black38,
+                            ),
+                            enabledBorder: const UnderlineInputBorder(
+                              borderSide: BorderSide(color: Colors.black26),
+                            ),
+                            focusedBorder: const UnderlineInputBorder(
+                              borderSide:
+                                  BorderSide(color: Colors.black87, width: 1.6),
+                            ),
+                          ),
+                        ),
+                        if (_nameError != null) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            _nameError!,
+                            style: GoogleFonts.manrope(
+                              color: Colors.redAccent,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: FilledButton(
+                            onPressed: _savingName ? null : _submitMissingName,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.black,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: _savingName
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text('Save name'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

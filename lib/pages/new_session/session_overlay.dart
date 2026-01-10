@@ -11,6 +11,8 @@ class SessionOverlay extends StatelessWidget {
     required this.affirmationSpan,
     required this.fallbackText,
     required this.micNeedsRestart,
+    required this.isMicListening,
+    required this.isMicTransitioning,
     required this.onMicTap,
 
     // Favorite
@@ -29,6 +31,8 @@ class SessionOverlay extends StatelessWidget {
   final String fallbackText;
 
   final bool micNeedsRestart;
+  final bool isMicListening;
+  final bool isMicTransitioning;
   final VoidCallback onMicTap;
 
   // Favorite
@@ -217,15 +221,17 @@ class SessionOverlay extends StatelessWidget {
                   children: [
                     InkWell(
                       borderRadius: BorderRadius.circular(28),
-                      onTap: micNeedsRestart ? onMicTap : null,
+                      onTap: isMicTransitioning ? null : onMicTap,
                       child: Padding(
                         padding: const EdgeInsets.all(6),
                         child: Icon(
                           Icons.mic_rounded,
                           size: 28,
-                          color: micNeedsRestart
-                              ? Colors.redAccent
-                              : Colors.black87,
+                          color: isMicListening
+                              ? Colors.green
+                              : (isMicTransitioning
+                                  ? Colors.grey
+                                  : Colors.redAccent),
                         ),
                       ),
                     ),

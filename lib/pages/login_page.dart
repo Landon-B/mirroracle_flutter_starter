@@ -40,6 +40,8 @@ class _LoginPageState extends State<LoginPage> {
         email: _email.text.trim(),
         password: _password.text.trim(),
       );
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } on AuthException catch (e) {
       setState(() { _error = e.message; });
     } catch (e) {
