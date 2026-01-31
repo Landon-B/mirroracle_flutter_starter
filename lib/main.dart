@@ -8,7 +8,7 @@ import 'pages/onboarding_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/camera_service.dart';
 
-const bool kForceOnboardingEveryLaunch = true; // TESTING ONLY
+const bool kForceOnboardingEveryLaunch = false; // TESTING ONLY
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

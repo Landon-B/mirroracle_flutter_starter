@@ -112,7 +112,7 @@ class SessionController extends ChangeNotifier {
 
   bool _shouldIgnoreMicResult() => DateTime.now().isBefore(_ignoreMicUntil);
 
-  void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 450)]) {
+  void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 250)]) {
     _ignoreMicUntil = DateTime.now().add(d);
   }
 
@@ -318,7 +318,6 @@ class SessionController extends ChangeNotifier {
       if (_speechMatcher.isComplete) {
         _micTransitioning = true;
         notifyListeners();
-        _mic.stop();
         _advanceAffirmation();
       }
     });
@@ -415,6 +414,8 @@ class SessionController extends ChangeNotifier {
     if (nextIdx < _affirmations.length) {
       _currentAffIdx = nextIdx;
       _resetMatcherAndShieldForNewAffirmation();
+      _micTransitioning = false;
+      notifyListeners();
       _restartMicForNextAffirmation();
       return;
     }
@@ -425,6 +426,8 @@ class SessionController extends ChangeNotifier {
       _currentAffRep = nextRound;
       _currentAffIdx = 0;
       _resetMatcherAndShieldForNewAffirmation();
+      _micTransitioning = false;
+      notifyListeners();
       _restartMicForNextAffirmation();
       return;
     }
@@ -433,10 +436,9 @@ class SessionController extends ChangeNotifier {
   }
 
   void _restartMicForNextAffirmation() {
-    Future.delayed(const Duration(milliseconds: 80), () {
-      if (_phase != SessionPhase.live) return;
-      _listen();
-    });
+    if (_mic.isListening) return;
+    if (_phase != SessionPhase.live) return;
+    _listen();
   }
 
   Future<void> finish() async {

@@ -230,13 +230,34 @@ alter table "public"."user_theme_preferences" validate constraint "user_theme_pr
 
 set check_function_bodies = off;
 
-CREATE OR REPLACE FUNCTION public.random_affirmations(p_limit integer)
- RETURNS SETOF public.affirmations
- LANGUAGE sql
- STABLE
-AS $function$
-  select * from public.affirmations
-  where active = true
+drop function if exists public.random_affirmations(integer);
+
+create function public.random_affirmations(p_limit integer)
+ returns table(
+  id uuid,
+  text text,
+  category text,
+  locale text,
+  active boolean,
+  created_at timestamp with time zone,
+  theme_id uuid,
+  theme_name text
+ )
+ language sql
+ stable
+as $function$
+  select
+    a.id,
+    a.text,
+    a.category,
+    a.locale,
+    a.active,
+    a.created_at,
+    a.theme_id,
+    t.name as theme_name
+  from public.affirmations a
+  left join public.themes t on t.id = a.theme_id
+  where a.active = true
   order by random()
   limit p_limit;
 $function$
@@ -675,6 +696,5 @@ with check ((auth.uid() = user_id));
   for select
   to authenticated
 using ((auth.uid() = user_id));
-
 
 

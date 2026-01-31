@@ -104,8 +104,37 @@ class _HomePageState extends State<HomePage> {
           .where((item) => item.text.isNotEmpty)
           .toList();
 
+      final themeIds = list
+          .map((item) => item.themeId)
+          .whereType<String>()
+          .toSet();
+      final themeNames = <String, String>{};
+      if (themeIds.isNotEmpty) {
+        final rows = await Supabase.instance.client
+            .from('themes')
+            .select('id,name')
+            .inFilter('id', themeIds.toList());
+        for (final row in (rows as List? ?? const [])) {
+          final id = (row as Map)['id']?.toString();
+          final name = row['name']?.toString();
+          if (id != null && name != null) {
+            themeNames[id] = name;
+          }
+        }
+      }
+
+      final mapped = list
+          .map(
+            (item) => item.copyWith(
+              themeName: item.themeId != null
+                  ? themeNames[item.themeId!]
+                  : null,
+            ),
+          )
+          .toList();
+
       setState(() {
-        _affirmations = list.isEmpty ? _fallbackAffirmations : list;
+        _affirmations = mapped;
         _boundaryKeys
           ..clear()
           ..addEntries(List.generate(
@@ -117,7 +146,7 @@ class _HomePageState extends State<HomePage> {
       await _loadFavorites();
     } catch (_) {
       setState(() {
-        _affirmations = _fallbackAffirmations;
+        _affirmations = [];
         _boundaryKeys
           ..clear()
           ..addEntries(List.generate(
@@ -129,21 +158,9 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  List<_AffirmationItem> get _fallbackAffirmations => const [
-        _AffirmationItem(id: 'fallback-1', text: 'I refuse to give up.'),
-        _AffirmationItem(id: 'fallback-2', text: 'I am grounded and clear.'),
-        _AffirmationItem(id: 'fallback-3', text: 'I can do hard things.'),
-        _AffirmationItem(id: 'fallback-4', text: 'I trust myself today.'),
-        _AffirmationItem(id: 'fallback-5', text: 'I finish what I start.'),
-      ];
-
   List<String> _sessionAffirmations() {
     if (_affirmations.isEmpty) {
-      return const [
-        'I am present.',
-        'I am capable.',
-        'I finish what I start.',
-      ];
+      return const [];
     }
     if (_affirmations.length <= 3) {
       return _affirmations.map((a) => a.text).toList();
@@ -421,83 +438,124 @@ class _HomePageState extends State<HomePage> {
                 Expanded(
                   child: _loading
                       ? const Center(child: CircularProgressIndicator())
-                      : PageView.builder(
-                          controller: _pageController,
-                          scrollDirection: Axis.vertical,
-                          onPageChanged: (idx) {
-                            setState(() => _pageIndex = idx);
-                          },
-                          itemCount: _affirmations.length,
-                          itemBuilder: (context, index) {
-                            return AnimatedBuilder(
-                              animation: _pageController,
-                              builder: (context, child) {
-                                double t = 0;
-                                if (_pageController.hasClients &&
-                                    _pageController
-                                        .position.hasContentDimensions) {
-                                  final page = _pageController.page ?? 0.0;
-                                  t = (1 - (page - index).abs())
-                                      .clamp(0.0, 1.0);
-                                } else if (index == 0) {
-                                  t = 1;
-                                }
-                                final scale = 0.92 + (0.08 * t);
-                                final opacity = 0.35 + (0.65 * t);
-                                return Center(
-                                  child: AnimatedOpacity(
-                                    duration: const Duration(milliseconds: 250),
-                                    opacity: opacity,
-                                    child: Transform.scale(
-                                      scale: scale,
-                                      child: Padding(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: size.width * 0.12,
-                                        ),
-                                        child: RepaintBoundary(
-                                          key: _boundaryKeys[index],
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 18,
-                                              vertical: 16,
+                      : _affirmations.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No affirmations available yet.',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Color(0xFF6B5B52),
+                                ),
+                              ),
+                            )
+                          : PageView.builder(
+                              controller: _pageController,
+                              scrollDirection: Axis.vertical,
+                              onPageChanged: (idx) {
+                                setState(() => _pageIndex = idx);
+                              },
+                              itemCount: _affirmations.length,
+                              itemBuilder: (context, index) {
+                                return AnimatedBuilder(
+                                  animation: _pageController,
+                                  builder: (context, child) {
+                                    double t = 0;
+                                    if (_pageController.hasClients &&
+                                        _pageController
+                                            .position.hasContentDimensions) {
+                                      final page = _pageController.page ?? 0.0;
+                                      t = (1 - (page - index).abs())
+                                          .clamp(0.0, 1.0);
+                                    } else if (index == 0) {
+                                      t = 1;
+                                    }
+                                    final scale = 0.92 + (0.08 * t);
+                                    final opacity = 0.35 + (0.65 * t);
+                                    final themeLabel =
+                                        _affirmations[index].displayTheme;
+                                    return Center(
+                                      child: AnimatedOpacity(
+                                        duration:
+                                            const Duration(milliseconds: 250),
+                                        opacity: opacity,
+                                        child: Transform.scale(
+                                          scale: scale,
+                                          child: Padding(
+                                            padding: EdgeInsets.symmetric(
+                                              horizontal: size.width * 0.12,
                                             ),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFFF6EEE7),
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                              boxShadow: const [
-                                                BoxShadow(
-                                                  color: Color(0x1A000000),
-                                                  blurRadius: 18,
-                                                  offset: Offset(0, 8),
+                                            child: RepaintBoundary(
+                                              key: _boundaryKeys[index],
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                  horizontal: 18,
+                                                  vertical: 16,
                                                 ),
-                                              ],
-                                              border: Border.all(
-                                                color: const Color(0xFFE5D6CB),
-                                                width: 1,
-                                              ),
-                                            ),
-                                            child: Text(
-                                              _affirmations[index].text,
-                                              textAlign: TextAlign.center,
-                                              style: const TextStyle(
-                                                fontSize: 30,
-                                                height: 1.3,
-                                                fontFamily: 'serif',
-                                                color: Color(0xFF4B3C36),
-                                                fontWeight: FontWeight.w600,
+                                                decoration: BoxDecoration(
+                                                  color:
+                                                      const Color(0xFFF6EEE7),
+                                                  borderRadius:
+                                                      BorderRadius.circular(20),
+                                                  boxShadow: const [
+                                                    BoxShadow(
+                                                      color: Color(0x1A000000),
+                                                      blurRadius: 18,
+                                                      offset: Offset(0, 8),
+                                                    ),
+                                                  ],
+                                                  border: Border.all(
+                                                    color:
+                                                        const Color(0xFFE5D6CB),
+                                                    width: 1,
+                                                  ),
+                                                ),
+                                                child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    if (themeLabel.isNotEmpty)
+                                                      Text(
+                                                        themeLabel,
+                                                        textAlign:
+                                                            TextAlign.center,
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          letterSpacing: 1.4,
+                                                          color:
+                                                              Color(0xFF8B7C73),
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                    if (themeLabel.isNotEmpty)
+                                                      const SizedBox(height: 10),
+                                                    Text(
+                                                      _affirmations[index].text,
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      style: const TextStyle(
+                                                        fontSize: 30,
+                                                        height: 1.3,
+                                                        fontFamily: 'serif',
+                                                        color:
+                                                            Color(0xFF4B3C36),
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ),
+                                    );
+                                  },
                                 );
                               },
-                            );
-                          },
-                        ),
+                            ),
                 ),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -752,12 +810,39 @@ class _HomePageState extends State<HomePage> {
 class _AffirmationItem {
   final String id;
   final String text;
-  const _AffirmationItem({required this.id, required this.text});
+  final String category;
+  final String? themeId;
+  final String? themeName;
+  const _AffirmationItem({
+    required this.id,
+    required this.text,
+    required this.category,
+    this.themeId,
+    this.themeName,
+  });
+
+  String get displayTheme {
+    final name = themeName?.trim();
+    if (name == null || name.isEmpty) return '';
+    return name.toUpperCase();
+  }
+
+  _AffirmationItem copyWith({String? themeName}) {
+    return _AffirmationItem(
+      id: id,
+      text: text,
+      category: category,
+      themeId: themeId,
+      themeName: themeName ?? this.themeName,
+    );
+  }
 
   factory _AffirmationItem.fromRow(Map row) {
     return _AffirmationItem(
       id: row['id']?.toString() ?? '',
       text: row['text']?.toString().trim() ?? '',
+      category: row['category']?.toString().trim() ?? 'daily focus',
+      themeId: row['theme_id']?.toString(),
     );
   }
 }
