@@ -33,6 +33,16 @@ class SessionSpeechMatcher {
 
   List<String> tokenizeSpeech(String text) => _tokenizeNormalized(text);
 
+  /// Tokenize speech and keep only the tail window near the current target.
+  /// This avoids earlier affirmations in the same recognition buffer.
+  List<String> tokenizeSpeechForCurrent(String text) {
+    final all = _tokenizeNormalized(text);
+    if (tokens.isEmpty || all.isEmpty) return all;
+    final window = tokens.length + 2;
+    if (all.length <= window) return all;
+    return all.sublist(all.length - window);
+  }
+
   bool updateWithSpokenTokens(List<String> spokenTokens) {
     if (tokens.isEmpty || spokenTokens.isEmpty) return false;
 

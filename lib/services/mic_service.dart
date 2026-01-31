@@ -72,6 +72,13 @@ class MicService {
     return e.toString().toLowerCase().contains('no speech');
   }
 
+  bool _isCanceledError(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('recognition request was canceled') ||
+        msg.contains('recognition request was cancelled') ||
+        msg.contains('klsrerrordomain code=301');
+  }
+
   AVAudioSessionCategoryOptions _iosCategoryOptions() {
     // audio_session expects AVAudioSessionCategoryOptions (bitmask object),
     // NOT int and NOT List<...>.
@@ -125,8 +132,9 @@ class MicService {
       _available = await _stt.initialize(
         debugLogging: debugLogging,
         onError: (e) {
-          if (debugLogging) _log('[plugin][error] $e');
-          if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+          final isCanceled = _isCanceledError(e);
+          if (!isCanceled && debugLogging) _log('[plugin][error] $e');
+          if (!isCanceled && !_errorCtrl.isClosed) _errorCtrl.add(e);
 
           if (_isNoSpeechError(e)) {
             _noSpeechStreak = (_noSpeechStreak + 1).clamp(1, 6);

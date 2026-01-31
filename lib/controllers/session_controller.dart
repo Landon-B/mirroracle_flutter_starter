@@ -320,7 +320,7 @@ class SessionController extends ChangeNotifier {
 
       if (debugMic) debugPrint('[mic][partial] $text');
 
-      final spokenTokens = _speechMatcher.tokenizeSpeech(text);
+      final spokenTokens = _speechMatcher.tokenizeSpeechForCurrent(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
       if (changed) notifyListeners();
       _handleAffirmationComplete();
@@ -340,7 +340,7 @@ class SessionController extends ChangeNotifier {
 
       if (debugMic) debugPrint('[mic][final] $text');
 
-      final spokenTokens = _speechMatcher.tokenizeSpeech(text);
+      final spokenTokens = _speechMatcher.tokenizeSpeechForCurrent(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
       if (changed) notifyListeners();
 
