@@ -6,6 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'home_page.dart';
 import 'profile_overlay.dart';
 import '../services/streak_service.dart';
+import '../services/mood_service.dart';
+import '../models/mood_entry.dart';
+import '../widgets/mood_checkin_sheet.dart';
 
 class SessionSummaryData {
   final int durationSec;
@@ -38,13 +41,15 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
   int _totalSessions = 0;
   int _affirmationsSpoken = 0;
   String _topCategory = 'Confidence';
-  double _moodValue = 0.5;
+  MoodEntry? _todayMood;
+  bool _loadingMood = true;
 
   @override
   void initState() {
     super.initState();
     _loadStreaks();
     _loadProgressStats();
+    _loadTodayMood();
   }
 
   Future<void> _loadStreaks() async {
@@ -94,6 +99,43 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
       if (!mounted) return;
       setState(() => _loadingStats = false);
     }
+  }
+
+  Future<void> _loadTodayMood() async {
+    try {
+      final entry = await MoodService().fetchForLocalDay(DateTime.now());
+      if (!mounted) return;
+      setState(() {
+        _todayMood = entry;
+        _loadingMood = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingMood = false);
+    }
+  }
+
+  void _openMoodCheckin() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) {
+        return MoodCheckinSheet(
+          title: 'How do you feel now?',
+          source: 'post_session',
+          initialScore: _todayMood?.moodScore,
+          initialTags: _todayMood?.tags ?? const [],
+          initialNote: _todayMood?.note,
+          onSaved: (entry) {
+            setState(() => _todayMood = entry);
+          },
+        );
+      },
+    );
   }
 
   void _openProfileOverlay() {
@@ -187,7 +229,9 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
               child: Column(
                 children: [
                   Text(
-                    'How do you feel now compared to when you started?',
+                    _todayMood == null
+                        ? 'Want to check in on your mood?'
+                        : 'Checked in today: ${_moodLabel(_todayMood!.moodScore)}',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.manrope(
                       fontSize: 14,
@@ -195,17 +239,15 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Slider(
-                    value: _moodValue,
-                    onChanged: (v) => setState(() => _moodValue = v),
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: const [
-                      Text('Drained'),
-                      Text('Steady'),
-                      Text('Replenished'),
-                    ],
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: FilledButton(
+                      onPressed: _loadingMood ? null : _openMoodCheckin,
+                      child: Text(
+                        _todayMood == null ? 'Check in now' : 'Update check-in',
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -355,5 +397,22 @@ class _SessionSummaryPageState extends State<SessionSummaryPage> {
         ],
       ),
     );
+  }
+
+  String _moodLabel(int score) {
+    switch (score) {
+      case 1:
+        return 'Struggling';
+      case 2:
+        return 'Low';
+      case 3:
+        return 'Steady';
+      case 4:
+        return 'Good';
+      case 5:
+        return 'Great';
+      default:
+        return 'Steady';
+    }
   }
 }

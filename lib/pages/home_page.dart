@@ -41,7 +41,6 @@ class _HomePageState extends State<HomePage> {
   bool _savingName = false;
   String? _nameError;
   final TextEditingController _nameController = TextEditingController();
-
   @override
   void initState() {
     super.initState();
@@ -157,6 +156,8 @@ class _HomePageState extends State<HomePage> {
       });
     }
   }
+
+  
 
   List<String> _sessionAffirmations() {
     if (_affirmations.isEmpty) {

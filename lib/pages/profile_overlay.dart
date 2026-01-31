@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../widgets/streak_bar.dart';
 import 'favorites_page.dart';
+import 'mood_trends_page.dart';
 
 class ProfileOverlay extends StatelessWidget {
   const ProfileOverlay({
@@ -81,7 +82,14 @@ class ProfileOverlay extends StatelessWidget {
                     _gridRow(
                       left: _tile(
                         icon: Icons.auto_awesome,
-                        label: 'App icon',
+                        label: 'Mood trends',
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const MoodTrendsPage(),
+                            ),
+                          );
+                        },
                       ),
                       right: _tile(
                         icon: Icons.notifications_none_rounded,
