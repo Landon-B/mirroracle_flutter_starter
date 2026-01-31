@@ -56,6 +56,8 @@ class MicService {
   bool _debugLogging = false;
   DateTime _lastStatusAt = DateTime.fromMillisecondsSinceEpoch(0);
   String? _lastStatus;
+  int _noSpeechStreak = 0;
+  DateTime _lastNoSpeechAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   void _setState(MicState s) {
     _state = s;
@@ -64,6 +66,13 @@ class MicService {
 
   void _log(String msg) {
     debugPrint('[mic] $msg');
+  }
+
+  bool _isNoSpeechError(Object e) {
+    if (e is stt.SpeechRecognitionError) {
+      return e.errorMsg.toLowerCase().contains('no speech');
+    }
+    return e.toString().toLowerCase().contains('no speech');
   }
 
   AVAudioSessionCategoryOptions _iosCategoryOptions() {
@@ -121,6 +130,17 @@ class MicService {
         onError: (e) {
           if (debugLogging) _log('[plugin][error] $e');
           if (!_errorCtrl.isClosed) _errorCtrl.add(e);
+
+          if (_isNoSpeechError(e)) {
+            _noSpeechStreak = (_noSpeechStreak + 1).clamp(1, 6);
+            _lastNoSpeechAt = DateTime.now();
+            if (_keepAlive && _state == MicState.listening) {
+              final backoffMs = 750 * (1 << (_noSpeechStreak - 1));
+              final delay =
+                  Duration(milliseconds: backoffMs.clamp(750, 8000));
+              _scheduleRestart(reason: 'no-speech', force: true, delay: delay);
+            }
+          }
         },
         onStatus: (status) {
           if (_disposed) return;
@@ -133,7 +153,20 @@ class MicService {
           final s = status.toLowerCase();
           if (s == 'done' || s == 'notlistening') {
             if (_keepAlive && _state == MicState.listening) {
-              _scheduleRestart(reason: 'status=$status', force: true);
+              final sinceNoSpeech =
+                  DateTime.now().difference(_lastNoSpeechAt);
+              if (_noSpeechStreak > 0 && sinceNoSpeech.inMilliseconds < 6000) {
+                final backoffMs = 750 * (1 << (_noSpeechStreak - 1));
+                final delay =
+                    Duration(milliseconds: backoffMs.clamp(750, 8000));
+                _scheduleRestart(
+                  reason: 'status=$status (no-speech backoff)',
+                  force: true,
+                  delay: delay,
+                );
+              } else {
+                _scheduleRestart(reason: 'status=$status', force: true);
+              }
             } else if (_state == MicState.listening && !_stt.isListening) {
               _setState(MicState.ready);
             }
@@ -163,13 +196,17 @@ class MicService {
     }
   }
 
-  void _scheduleRestart({required String reason, bool force = false}) {
+  void _scheduleRestart({
+    required String reason,
+    bool force = false,
+    Duration? delay,
+  }) {
     if (_disposed) return;
     if (!_keepAlive) return;
 
     // Avoid restart storms.
     _restartTimer?.cancel();
-    _restartTimer = Timer(const Duration(milliseconds: 250), () async {
+    _restartTimer = Timer(delay ?? const Duration(milliseconds: 250), () async {
       if (_disposed) return;
       if (!_keepAlive) return;
       if (_state != MicState.listening) return;
@@ -261,6 +298,8 @@ class MicService {
 
           final txt = res.recognizedWords.trim();
           if (txt.isEmpty) return;
+
+          _noSpeechStreak = 0;
 
           if (res.finalResult) {
             if (_debugLogging) _log('[final] $txt');

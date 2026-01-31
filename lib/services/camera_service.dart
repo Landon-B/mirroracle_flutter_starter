@@ -95,7 +95,8 @@ class CameraService {
       throw lastErr;
     }
 
-    await _postInitTuning();
+    // Temporarily disabled to isolate camera lag.
+    // await _postInitTuning();
   }
 
   Future<List<CameraDescription>> _loadCameras() async {
