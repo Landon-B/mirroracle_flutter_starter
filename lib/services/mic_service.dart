@@ -69,9 +69,6 @@ class MicService {
   }
 
   bool _isNoSpeechError(Object e) {
-    if (e is stt.SpeechRecognitionError) {
-      return e.errorMsg.toLowerCase().contains('no speech');
-    }
     return e.toString().toLowerCase().contains('no speech');
   }
 

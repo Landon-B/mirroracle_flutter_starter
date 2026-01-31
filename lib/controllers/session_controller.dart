@@ -109,6 +109,9 @@ class SessionController extends ChangeNotifier {
   // ---- ignore tail-end mic results right after switching affirmations ----
   DateTime _ignoreMicUntil = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _advanceTimer;
+  bool _awaitingNewUtterance = false;
+  DateTime _lastMicEventAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _minGapForNewUtterance = Duration(milliseconds: 700);
 
   bool _shouldIgnoreMicResult() => DateTime.now().isBefore(_ignoreMicUntil);
 
@@ -119,7 +122,17 @@ class SessionController extends ChangeNotifier {
   void _resetMatcherAndShieldForNewAffirmation() {
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
     _armMicIgnoreWindow();
+    _awaitingNewUtterance = true;
     notifyListeners();
+  }
+
+  void _handleAffirmationComplete() {
+    if (!_speechMatcher.isComplete) return;
+    if (_micTransitioning) return;
+    _micTransitioning = true;
+    _awaitingNewUtterance = true;
+    notifyListeners();
+    _advanceAffirmation();
   }
 
   // ---------------------------
@@ -297,17 +310,33 @@ class SessionController extends ChangeNotifier {
     _partialSub = _mic.partialText$.listen((text) {
       if (_phase != SessionPhase.live) return;
       if (_shouldIgnoreMicResult()) return;
+      final now = DateTime.now();
+      if (_awaitingNewUtterance &&
+          now.difference(_lastMicEventAt) < _minGapForNewUtterance) {
+        _lastMicEventAt = now;
+        return;
+      }
+      _awaitingNewUtterance = false;
 
       if (debugMic) debugPrint('[mic][partial] $text');
 
       final spokenTokens = _speechMatcher.tokenizeSpeech(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
       if (changed) notifyListeners();
+      _handleAffirmationComplete();
+      _lastMicEventAt = now;
     });
 
     _finalSub = _mic.finalText$.listen((text) {
       if (_phase != SessionPhase.live) return;
       if (_shouldIgnoreMicResult()) return;
+      final now = DateTime.now();
+      if (_awaitingNewUtterance &&
+          now.difference(_lastMicEventAt) < _minGapForNewUtterance) {
+        _lastMicEventAt = now;
+        return;
+      }
+      _awaitingNewUtterance = false;
 
       if (debugMic) debugPrint('[mic][final] $text');
 
@@ -315,11 +344,8 @@ class SessionController extends ChangeNotifier {
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
       if (changed) notifyListeners();
 
-      if (_speechMatcher.isComplete) {
-        _micTransitioning = true;
-        notifyListeners();
-        _advanceAffirmation();
-      }
+      _handleAffirmationComplete();
+      _lastMicEventAt = now;
     });
 
     _errSub = _mic.errors$.listen((err) {
@@ -436,9 +462,13 @@ class SessionController extends ChangeNotifier {
   }
 
   void _restartMicForNextAffirmation() {
-    if (_mic.isListening) return;
     if (_phase != SessionPhase.live) return;
-    _listen();
+    // Hard reset STT so partials from the previous affirmation don't carry over.
+    _mic.stop();
+    Future.delayed(const Duration(milliseconds: 250), () {
+      if (_phase != SessionPhase.live) return;
+      _listen();
+    });
   }
 
   Future<void> finish() async {
