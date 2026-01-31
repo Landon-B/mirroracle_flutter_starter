@@ -5,6 +5,10 @@ import 'dart:ui' show Offset;
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../core/constants.dart';
+import '../core/logger.dart';
+import '../core/service_locator.dart';
+
 /// CameraService is responsible for camera selection + lifecycle.
 /// It does NOT know about UI or session timing.
 class CameraService {
@@ -13,6 +17,8 @@ class CameraService {
 
   factory CameraService() => _instance;
   CameraService._internal();
+
+  AppLogger get _log => sl<AppLogger>();
 
   CameraController? _controller;
   Future<void>? _initFuture;
@@ -53,6 +59,7 @@ class CameraService {
   Future<void> _initImpl() async {
     final cams = await _loadCameras();
     if (cams.isEmpty) {
+      _log.camera('No cameras available on device', level: LogLevel.warning);
       _controller = null;
       return;
     }
@@ -85,13 +92,16 @@ class CameraService {
         _controller = controller;
         _selectedPreset = preset;
         lastErr = null;
+        _log.camera('Initialized with preset: $preset');
         break;
       } on CameraException catch (e) {
+        _log.camera('Failed to init with preset $preset', level: LogLevel.warning, error: e);
         lastErr = e;
       }
     }
 
     if (_controller == null && lastErr != null) {
+      _log.camera('All presets failed', level: LogLevel.error, error: lastErr);
       throw lastErr;
     }
 
@@ -101,9 +111,14 @@ class CameraService {
 
   Future<List<CameraDescription>> _loadCameras() async {
     if (_cachedCameras != null) return _cachedCameras!;
-    final cams = await availableCameras();
-    _cachedCameras = cams;
-    return cams;
+    try {
+      final cams = await availableCameras();
+      _cachedCameras = cams;
+      return cams;
+    } catch (e) {
+      _log.camera('Failed to load cameras', level: LogLevel.error, error: e);
+      return [];
+    }
   }
 
   List<ResolutionPreset> _preferredPresets() {
@@ -131,65 +146,82 @@ class CameraService {
     try {
       final minZoom = await c.getMinZoomLevel();
       final maxZoom = await c.getMaxZoomLevel();
-      final targetZoom = (minZoom + 0.35).clamp(minZoom, maxZoom);
+      final targetZoom = (minZoom + kCameraZoomOffset).clamp(minZoom, maxZoom);
       await _setZoomSmooth(c, targetZoom);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to set zoom', level: LogLevel.debug, error: e);
+    }
 
     try {
       await c.setFocusMode(FocusMode.auto);
-    } catch (_) {
+    } catch (e) {
+      _log.camera('Auto focus not supported, trying locked', level: LogLevel.debug, error: e);
       try {
         await c.setFocusMode(FocusMode.locked);
-      } catch (_) {}
+      } catch (e2) {
+        _log.camera('Locked focus also failed', level: LogLevel.debug, error: e2);
+      }
     }
 
     try {
       await c.setExposureMode(ExposureMode.auto);
-    } catch (_) {
+    } catch (e) {
+      _log.camera('Auto exposure not supported, trying locked', level: LogLevel.debug, error: e);
       try {
         await c.setExposureMode(ExposureMode.locked);
-      } catch (_) {}
+      } catch (e2) {
+        _log.camera('Locked exposure also failed', level: LogLevel.debug, error: e2);
+      }
     }
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(kCameraPostInitDelay);
 
     try {
       if (c.value.focusPointSupported) {
         await c.setFocusPoint(const Offset(0.5, 0.5));
       }
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to set focus point', level: LogLevel.debug, error: e);
+    }
 
     try {
       if (c.value.exposurePointSupported) {
         await c.setExposurePoint(const Offset(0.5, 0.5));
       }
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to set exposure point', level: LogLevel.debug, error: e);
+    }
 
     try {
       await c.setFocusMode(FocusMode.locked);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to lock focus', level: LogLevel.debug, error: e);
+    }
 
     try {
       await c.setExposureMode(ExposureMode.locked);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to lock exposure', level: LogLevel.debug, error: e);
+    }
   }
 
   Future<void> _setZoomSmooth(CameraController c, double target) async {
     double current;
     try {
       current = await c.getMinZoomLevel();
-    } catch (_) {
+    } catch (e) {
+      _log.camera('Failed to get min zoom, defaulting to 1.0', level: LogLevel.debug, error: e);
       current = 1.0;
     }
-    const steps = 3;
-    for (int i = 1; i <= steps; i++) {
-      final level = current + (target - current) * (i / steps);
+    for (int i = 1; i <= kCameraZoomSteps; i++) {
+      final level = current + (target - current) * (i / kCameraZoomSteps);
       try {
         await c.setZoomLevel(level);
-      } catch (_) {
+      } catch (e) {
+        _log.camera('Zoom step $i failed', level: LogLevel.debug, error: e);
         break;
       }
-      await Future.delayed(const Duration(milliseconds: 40));
+      await Future.delayed(kCameraZoomStepDelay);
     }
   }
 
@@ -197,11 +229,16 @@ class CameraService {
     void Function(CameraImage image) onAvailable,
   ) async {
     final c = _controller;
-    if (c == null || !c.value.isInitialized) return;
+    if (c == null || !c.value.isInitialized) {
+      _log.camera('Cannot start stream: controller not initialized', level: LogLevel.warning);
+      return;
+    }
     if (c.value.isStreamingImages) return;
     try {
       await c.startImageStream(onAvailable);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to start image stream', level: LogLevel.error, error: e);
+    }
   }
 
   Future<void> stopImageStream() async {
@@ -210,7 +247,9 @@ class CameraService {
     if (!c.value.isStreamingImages) return;
     try {
       await c.stopImageStream();
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to stop image stream', level: LogLevel.warning, error: e);
+    }
   }
 
   Future<void> tapToFocus(Offset point) async {
@@ -222,33 +261,46 @@ class CameraService {
 
     try {
       await c.setFocusMode(FocusMode.auto);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('tap-to-focus: auto focus failed', level: LogLevel.debug, error: e);
+    }
     try {
       if (c.value.focusPointSupported) {
         await c.setFocusPoint(normalized);
       }
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('tap-to-focus: set focus point failed', level: LogLevel.debug, error: e);
+    }
 
     try {
       await c.setExposureMode(ExposureMode.auto);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('tap-to-focus: auto exposure failed', level: LogLevel.debug, error: e);
+    }
     try {
       if (c.value.exposurePointSupported) {
         await c.setExposurePoint(normalized);
       }
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('tap-to-focus: set exposure point failed', level: LogLevel.debug, error: e);
+    }
 
-    await Future.delayed(const Duration(milliseconds: 300));
+    await Future.delayed(kCameraFocusLockDelay);
 
     try {
       await c.setFocusMode(FocusMode.locked);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('tap-to-focus: lock focus failed', level: LogLevel.debug, error: e);
+    }
     try {
       await c.setExposureMode(ExposureMode.locked);
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('tap-to-focus: lock exposure failed', level: LogLevel.debug, error: e);
+    }
   }
 
   Future<void> recover() async {
+    _log.camera('Recovering camera...');
     await dispose(force: true);
     await init();
   }
@@ -258,7 +310,9 @@ class CameraService {
     if (c == null || !c.value.isInitialized) return;
     try {
       await c.pausePreview();
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to pause preview', level: LogLevel.warning, error: e);
+    }
   }
 
   Future<void> resumePreview() async {
@@ -266,7 +320,9 @@ class CameraService {
     if (c == null || !c.value.isInitialized) return;
     try {
       await c.resumePreview();
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Failed to resume preview', level: LogLevel.warning, error: e);
+    }
   }
 
   Future<void> dispose({bool force = false}) async {
@@ -276,7 +332,9 @@ class CameraService {
     }
     try {
       await _controller?.dispose();
-    } catch (_) {}
+    } catch (e) {
+      _log.camera('Error during dispose', level: LogLevel.warning, error: e);
+    }
     _controller = null;
     _initFuture = null;
   }

@@ -1,24 +1,21 @@
 // lib/pages/home_page.dart
-import 'dart:async'; // ✅ required for StreamSubscription
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:google_fonts/google_fonts.dart';
 
-import '../services/mic_service.dart';
+import '../core/constants.dart';
 import '../services/streak_service.dart';
-import '../widgets/streak_bar.dart';
+import '../widgets/home/home_widgets.dart';
+import 'mic_debug_page.dart';
 import 'new_session_page.dart';
 import 'profile_overlay.dart';
-
-const bool kForceStreakBarEveryLaunch = true; // TESTING ONLY
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -28,19 +25,24 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final PageController _pageController = PageController();
-  List<_AffirmationItem> _affirmations = [];
+  List<AffirmationItem> _affirmations = [];
   final Map<int, GlobalKey> _boundaryKeys = {};
   final Set<String> _favoriteIds = {};
   int _pageIndex = 0;
   bool _loading = true;
+
+  // Streak bar state
   bool _showStreakBar = false;
   bool _streakBarVisible = false;
   StreakInfo? _streak;
   bool _loadingStreak = false;
+
+  // Name overlay state
   bool _showNameOverlay = false;
   bool _savingName = false;
   String? _nameError;
   final TextEditingController _nameController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +57,10 @@ class _HomePageState extends State<HomePage> {
     _nameController.dispose();
     super.dispose();
   }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Name Overlay Logic
+  // ──────────────────────────────────────────────────────────────────────────
 
   Future<void> _checkMissingName() async {
     final user = Supabase.instance.client.auth.currentUser;
@@ -79,9 +85,7 @@ class _HomePageState extends State<HomePage> {
         UserAttributes(data: {'first_name': name}),
       );
       if (!mounted) return;
-      setState(() {
-        _showNameOverlay = false;
-      });
+      setState(() => _showNameOverlay = false);
     } on AuthException catch (e) {
       setState(() => _nameError = e.message);
     } catch (e) {
@@ -93,20 +97,22 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Affirmations Logic
+  // ──────────────────────────────────────────────────────────────────────────
+
   Future<void> _loadAffirmations() async {
     try {
       final rows = await Supabase.instance.client
           .rpc('random_affirmations', params: {'p_limit': 20});
 
       final list = (rows as List? ?? const [])
-          .map((e) => _AffirmationItem.fromRow(e as Map))
+          .map((e) => AffirmationItem.fromRow(e as Map))
           .where((item) => item.text.isNotEmpty)
           .toList();
 
-      final themeIds = list
-          .map((item) => item.themeId)
-          .whereType<String>()
-          .toSet();
+      final themeIds =
+          list.map((item) => item.themeId).whereType<String>().toSet();
       final themeNames = <String, String>{};
       if (themeIds.isNotEmpty) {
         final rows = await Supabase.instance.client
@@ -125,9 +131,7 @@ class _HomePageState extends State<HomePage> {
       final mapped = list
           .map(
             (item) => item.copyWith(
-              themeName: item.themeId != null
-                  ? themeNames[item.themeId!]
-                  : null,
+              themeName: item.themeId != null ? themeNames[item.themeId!] : null,
             ),
           )
           .toList();
@@ -146,23 +150,14 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {
       setState(() {
         _affirmations = [];
-        _boundaryKeys
-          ..clear()
-          ..addEntries(List.generate(
-            _affirmations.length,
-            (i) => MapEntry(i, GlobalKey()),
-          ));
+        _boundaryKeys.clear();
         _loading = false;
       });
     }
   }
 
-  
-
   List<String> _sessionAffirmations() {
-    if (_affirmations.isEmpty) {
-      return const [];
-    }
+    if (_affirmations.isEmpty) return const [];
     if (_affirmations.length <= 3) {
       return _affirmations.map((a) => a.text).toList();
     }
@@ -199,7 +194,7 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {}
   }
 
-  Future<void> _toggleFavorite(_AffirmationItem item) async {
+  Future<void> _toggleFavorite(AffirmationItem item) async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) return;
     if (item.id.startsWith('fallback-')) return;
@@ -242,6 +237,10 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Streak Bar Logic
+  // ──────────────────────────────────────────────────────────────────────────
+
   Future<void> _checkDailyStreakBar() async {
     if (kForceStreakBarEveryLaunch) {
       if (!mounted) return;
@@ -250,14 +249,7 @@ class _HomePageState extends State<HomePage> {
         _streakBarVisible = true;
       });
       _loadStreaks();
-      Future.delayed(const Duration(seconds: 3), () {
-        if (!mounted) return;
-        setState(() => _streakBarVisible = false);
-        Future.delayed(const Duration(milliseconds: 350), () {
-          if (!mounted) return;
-          setState(() => _showStreakBar = false);
-        });
-      });
+      _scheduleStreakBarHide();
       return;
     }
 
@@ -274,14 +266,7 @@ class _HomePageState extends State<HomePage> {
         _streakBarVisible = true;
       });
       _loadStreaks();
-      Future.delayed(const Duration(seconds: 3), () {
-        if (!mounted) return;
-        setState(() => _streakBarVisible = false);
-        Future.delayed(const Duration(milliseconds: 350), () {
-          if (!mounted) return;
-          setState(() => _showStreakBar = false);
-        });
-      });
+      _scheduleStreakBarHide();
     } else {
       if (!mounted) return;
       setState(() {
@@ -289,6 +274,17 @@ class _HomePageState extends State<HomePage> {
         _streakBarVisible = false;
       });
     }
+  }
+
+  void _scheduleStreakBarHide() {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      setState(() => _streakBarVisible = false);
+      Future.delayed(const Duration(milliseconds: 350), () {
+        if (!mounted) return;
+        setState(() => _showStreakBar = false);
+      });
+    });
   }
 
   Future<void> _loadStreaks() async {
@@ -312,6 +308,10 @@ class _HomePageState extends State<HomePage> {
       setState(() => _loadingStreak = false);
     }
   }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Profile Overlay
+  // ──────────────────────────────────────────────────────────────────────────
 
   void _openProfileOverlay() {
     _loadStreaks();
@@ -343,462 +343,30 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
+  // ──────────────────────────────────────────────────────────────────────────
+  // Navigation
+  // ──────────────────────────────────────────────────────────────────────────
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFEDE1D8),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: const Alignment(0, -0.6),
-                  radius: 1.2,
-                  colors: [
-                    const Color(0xFFF4ECE4),
-                    const Color(0xFFE5D6CB),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                const SizedBox(height: 12),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      _roundIcon(
-                        icon: Icons.person_outline_rounded,
-                        onTap: _openProfileOverlay,
-                      ),
-                      const Spacer(),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (_showStreakBar)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: AnimatedSlide(
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeInOut,
-                      offset: _streakBarVisible
-                          ? Offset.zero
-                          : const Offset(0, -0.4),
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 250),
-                        opacity: _streakBarVisible ? 1 : 0,
-                        child: StreakBar(
-                          activeDates: _streak?.activeDates ?? const {},
-                          loading: _loadingStreak,
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_showStreakBar) const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2F2624),
-                    borderRadius: BorderRadius.circular(28),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 16,
-                        offset: Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Icon(Icons.auto_awesome, color: Colors.white70, size: 18),
-                      SizedBox(width: 8),
-                      Text(
-                        'Daily affirmations',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: .2,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Expanded(
-                  child: _loading
-                      ? const Center(child: CircularProgressIndicator())
-                      : _affirmations.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'No affirmations available yet.',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Color(0xFF6B5B52),
-                                ),
-                              ),
-                            )
-                          : PageView.builder(
-                              controller: _pageController,
-                              scrollDirection: Axis.vertical,
-                              onPageChanged: (idx) {
-                                setState(() => _pageIndex = idx);
-                              },
-                              itemCount: _affirmations.length,
-                              itemBuilder: (context, index) {
-                                return AnimatedBuilder(
-                                  animation: _pageController,
-                                  builder: (context, child) {
-                                    double t = 0;
-                                    if (_pageController.hasClients &&
-                                        _pageController
-                                            .position.hasContentDimensions) {
-                                      final page = _pageController.page ?? 0.0;
-                                      t = (1 - (page - index).abs())
-                                          .clamp(0.0, 1.0);
-                                    } else if (index == 0) {
-                                      t = 1;
-                                    }
-                                    final scale = 0.92 + (0.08 * t);
-                                    final opacity = 0.35 + (0.65 * t);
-                                    final themeLabel =
-                                        _affirmations[index].displayTheme;
-                                    return Center(
-                                      child: AnimatedOpacity(
-                                        duration:
-                                            const Duration(milliseconds: 250),
-                                        opacity: opacity,
-                                        child: Transform.scale(
-                                          scale: scale,
-                                          child: Padding(
-                                            padding: EdgeInsets.symmetric(
-                                              horizontal: size.width * 0.12,
-                                            ),
-                                            child: RepaintBoundary(
-                                              key: _boundaryKeys[index],
-                                              child: Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                  horizontal: 18,
-                                                  vertical: 16,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color:
-                                                      const Color(0xFFF6EEE7),
-                                                  borderRadius:
-                                                      BorderRadius.circular(20),
-                                                  boxShadow: const [
-                                                    BoxShadow(
-                                                      color: Color(0x1A000000),
-                                                      blurRadius: 18,
-                                                      offset: Offset(0, 8),
-                                                    ),
-                                                  ],
-                                                  border: Border.all(
-                                                    color:
-                                                        const Color(0xFFE5D6CB),
-                                                    width: 1,
-                                                  ),
-                                                ),
-                                                child: Column(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    if (themeLabel.isNotEmpty)
-                                                      Text(
-                                                        themeLabel,
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                        style: const TextStyle(
-                                                          fontSize: 12,
-                                                          letterSpacing: 1.4,
-                                                          color:
-                                                              Color(0xFF8B7C73),
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                        ),
-                                                      ),
-                                                    if (themeLabel.isNotEmpty)
-                                                      const SizedBox(height: 10),
-                                                    Text(
-                                                      _affirmations[index].text,
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                      style: const TextStyle(
-                                                        fontSize: 30,
-                                                        height: 1.3,
-                                                        fontFamily: 'serif',
-                                                        color:
-                                                            Color(0xFF4B3C36),
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.ios_share_rounded),
-                        color: const Color(0xFF5C4B42),
-                        onPressed: _affirmations.isEmpty
-                            ? null
-                            : _shareCurrentAffirmation,
-                        tooltip: 'Share',
-                      ),
-                      const SizedBox(width: 16),
-                      Builder(
-                        builder: (context) {
-                          final item = _affirmations.isEmpty
-                              ? null
-                              : _affirmations[_pageIndex % _affirmations.length];
-                          return IconButton(
-                            icon: Icon(
-                              item != null && _favoriteIds.contains(item.id)
-                                  ? Icons.favorite_rounded
-                                  : Icons.favorite_border_rounded,
-                            ),
-                            color: const Color(0xFFE07A6B),
-                            onPressed: item == null
-                                ? null
-                                : () => _toggleFavorite(item),
-                            tooltip: 'Favorite',
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 24),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        height: 56,
-                        child: FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFF7F1EB),
-                            foregroundColor: const Color(0xFF2F2624),
-                            elevation: 6,
-                            shadowColor: Colors.black26,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(28),
-                            ),
-                            padding: const EdgeInsets.symmetric(horizontal: 22),
-                          ),
-                          onPressed: _affirmations.isEmpty
-                              ? null
-                              : () async {
-                                  final seed = _sessionAffirmations();
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => NewSessionPage(
-                                        initialAffirmations: seed,
-                                      ),
-                                    ),
-                                  );
-                                  if (!mounted) return;
-                                  _loadAffirmations();
-                                },
-                          onLongPress: () async {
-                            await Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const _MicDebugPage(),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.self_improvement_outlined),
-                          label: const Text(
-                            'Practice',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (_showNameOverlay)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black45,
-                child: Center(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF4ECE4),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
-                        color: const Color(0xFFE5D6CB),
-                        width: 1.2,
-                      ),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 24,
-                          offset: Offset(0, 14),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF2F2624),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            'TEST MODE',
-                            style: GoogleFonts.manrope(
-                              fontSize: 11,
-                              letterSpacing: 1.2,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Add your first name',
-                          style: GoogleFonts.dmSerifDisplay(
-                            fontSize: 24,
-                            color: const Color(0xFF2F2624),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'This is temporary and only for existing test accounts.',
-                          style: GoogleFonts.manrope(
-                            fontSize: 14,
-                            height: 1.35,
-                            color: const Color(0xFF6B5B52),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        TextField(
-                          controller: _nameController,
-                          textInputAction: TextInputAction.done,
-                          decoration: InputDecoration(
-                            hintText: 'First name',
-                            hintStyle: GoogleFonts.manrope(
-                              color: Colors.black38,
-                            ),
-                            enabledBorder: const UnderlineInputBorder(
-                              borderSide: BorderSide(color: Colors.black26),
-                            ),
-                            focusedBorder: const UnderlineInputBorder(
-                              borderSide:
-                                  BorderSide(color: Colors.black87, width: 1.6),
-                            ),
-                          ),
-                        ),
-                        if (_nameError != null) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            _nameError!,
-                            style: GoogleFonts.manrope(
-                              color: Colors.redAccent,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 48,
-                          child: FilledButton(
-                            onPressed: _savingName ? null : _submitMissingName,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.black,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                            child: _savingName
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Text('Save name'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
+  Future<void> _navigateToSession() async {
+    final seed = _sessionAffirmations();
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NewSessionPage(initialAffirmations: seed),
       ),
+    );
+    if (!mounted) return;
+    _loadAffirmations();
+  }
+
+  void _navigateToMicDebug() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const MicDebugPage()),
     );
   }
 
-  Widget _roundIcon({required IconData icon, required VoidCallback onTap}) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(24),
-        onTap: onTap,
-        child: Ink(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: const Color(0xFFF7F1EB),
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black12,
-                blurRadius: 12,
-                offset: Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Icon(icon, color: const Color(0xFF2F2624)),
-        ),
-      ),
-    );
-  }
+  // ──────────────────────────────────────────────────────────────────────────
+  // Helpers
+  // ──────────────────────────────────────────────────────────────────────────
 
   String _formatDateKey(DateTime dt) {
     final y = dt.year.toString().padLeft(4, '0');
@@ -806,190 +374,162 @@ class _HomePageState extends State<HomePage> {
     final d = dt.day.toString().padLeft(2, '0');
     return '$y-$m-$d';
   }
-}
 
-class _AffirmationItem {
-  final String id;
-  final String text;
-  final String category;
-  final String? themeId;
-  final String? themeName;
-  const _AffirmationItem({
-    required this.id,
-    required this.text,
-    required this.category,
-    this.themeId,
-    this.themeName,
-  });
-
-  String get displayTheme {
-    final name = themeName?.trim();
-    if (name == null || name.isEmpty) return '';
-    return name.toUpperCase();
+  AffirmationItem? get _currentAffirmation {
+    if (_affirmations.isEmpty) return null;
+    return _affirmations[_pageIndex % _affirmations.length];
   }
 
-  _AffirmationItem copyWith({String? themeName}) {
-    return _AffirmationItem(
-      id: id,
-      text: text,
-      category: category,
-      themeId: themeId,
-      themeName: themeName ?? this.themeName,
-    );
+  bool get _isCurrentFavorited {
+    final item = _currentAffirmation;
+    return item != null && _favoriteIds.contains(item.id);
   }
 
-  factory _AffirmationItem.fromRow(Map row) {
-    return _AffirmationItem(
-      id: row['id']?.toString() ?? '',
-      text: row['text']?.toString().trim() ?? '',
-      category: row['category']?.toString().trim() ?? 'daily focus',
-      themeId: row['theme_id']?.toString(),
-    );
-  }
-}
-
-/// Hidden mic debug screen (long-press Practice to open).
-class _MicDebugPage extends StatefulWidget {
-  const _MicDebugPage();
-
-  @override
-  State<_MicDebugPage> createState() => _MicDebugPageState();
-}
-
-class _MicDebugPageState extends State<_MicDebugPage> {
-  late final MicService _mic;
-
-  StreamSubscription<String>? _partialSub;
-  StreamSubscription<String>? _finalSub;
-  StreamSubscription<double>? _levelSub;
-  StreamSubscription<Object>? _errSub;
-  StreamSubscription<MicState>? _stateSub;
-
-  String _partial = '';
-  String _final = '';
-  double _level = 0.0;
-  MicState _state = MicState.idle;
-  Object? _lastErr;
-
-  @override
-  void initState() {
-    super.initState();
-    _mic = MicService();
-
-    _stateSub = _mic.state$.listen((s) {
-      setState(() => _state = s);
-    });
-
-    _partialSub = _mic.partialText$.listen((t) {
-      setState(() => _partial = t);
-    });
-
-    _finalSub = _mic.finalText$.listen((t) {
-      setState(() => _final = t);
-    });
-
-    _levelSub = _mic.soundLevel$.listen((v) {
-      setState(() => _level = v);
-    });
-
-    _errSub = _mic.errors$.listen((e) {
-      setState(() => _lastErr = e);
-    });
-
-    _boot();
-  }
-
-  Future<void> _boot() async {
-    final ok = await _mic.init(debugLogging: true);
-    if (!ok) return;
-
-    await _mic.start(
-      partialResults: true,
-      cancelOnError: false,
-      listenFor: const Duration(minutes: 10),
-      pauseFor: const Duration(seconds: 6),
-    );
-  }
-
-  @override
-  void dispose() {
-    _partialSub?.cancel();
-    _finalSub?.cancel();
-    _levelSub?.cancel();
-    _errSub?.cancel();
-    _stateSub?.cancel();
-
-    _mic.dispose();
-    super.dispose();
-  }
+  // ──────────────────────────────────────────────────────────────────────────
+  // Build
+  // ──────────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
-      appBar: AppBar(title: const Text('Mic debug')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: DefaultTextStyle(
-          style: theme.textTheme.bodyMedium ?? const TextStyle(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('State: $_state'),
-              const SizedBox(height: 8),
-              Text('Level: ${(_level * 100).toStringAsFixed(0)}%'),
-              const SizedBox(height: 6),
-              LinearProgressIndicator(value: _level.clamp(0.0, 1.0)),
-              const SizedBox(height: 16),
-              const Text('Partial:'),
-              Text(_partial, style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 16),
-              const Text('Final:'),
-              Text(
-                _final,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 16),
-              if (_lastErr != null) ...[
-                const Text('Last error:'),
-                Text('$_lastErr', style: const TextStyle(color: Colors.red)),
-              ],
-              const Spacer(),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () async {
-                        await _mic.stop();
-                      },
-                      child: const Text('Stop'),
-                    ),
+      backgroundColor: const Color(0xFFEDE1D8),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          _buildBackground(),
+          SafeArea(
+            child: Column(
+              children: [
+                const SizedBox(height: 12),
+                _buildHeader(),
+                const SizedBox(height: 8),
+                if (_showStreakBar) ...[
+                  AnimatedStreakBar(
+                    visible: _streakBarVisible,
+                    activeDates: _streak?.activeDates ?? const {},
+                    loading: _loadingStreak,
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () async {
-                        await _mic.start(
-                          partialResults: true,
-                          cancelOnError: false,
-                          listenFor: const Duration(minutes: 10),
-                          pauseFor: const Duration(seconds: 1),
-                        );
-                      },
-                      child: const Text('Start'),
-                    ),
-                  ),
+                  const SizedBox(height: 16),
                 ],
-              ),
+                const DailyAffirmationsChip(),
+                const SizedBox(height: 24),
+                Expanded(child: _buildAffirmationList()),
+                _buildBottomActions(),
+              ],
+            ),
+          ),
+          if (_showNameOverlay)
+            NameOverlay(
+              controller: _nameController,
+              errorMessage: _nameError,
+              isSaving: _savingName,
+              onSubmit: _submitMissingName,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBackground() {
+    return Positioned.fill(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: const Alignment(0, -0.6),
+            radius: 1.2,
+            colors: [
+              const Color(0xFFF4ECE4),
+              const Color(0xFFE5D6CB),
             ],
           ),
         ),
       ),
     );
   }
-}
 
-/// ✅ Temporary in-app mic test screen.
-/// If this page prints partial/final results, your MicService is fine and the issue is in NewSession wiring.
-/// If it prints nothing, the issue is deeper (plugin/permissions/audio session).
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          RoundIconButton(
+            icon: Icons.person_outline_rounded,
+            onTap: _openProfileOverlay,
+          ),
+          const Spacer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAffirmationList() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_affirmations.isEmpty) {
+      return const Center(
+        child: Text(
+          'No affirmations available yet.',
+          style: TextStyle(fontSize: 16, color: Color(0xFF6B5B52)),
+        ),
+      );
+    }
+    return PageView.builder(
+      controller: _pageController,
+      scrollDirection: Axis.vertical,
+      onPageChanged: (idx) => setState(() => _pageIndex = idx),
+      itemCount: _affirmations.length,
+      itemBuilder: (context, index) {
+        return AnimatedBuilder(
+          animation: _pageController,
+          builder: (context, child) {
+            double t = 0;
+            if (_pageController.hasClients &&
+                _pageController.position.hasContentDimensions) {
+              final page = _pageController.page ?? 0.0;
+              t = (1 - (page - index).abs()).clamp(0.0, 1.0);
+            } else if (index == 0) {
+              t = 1;
+            }
+            final scale = 0.92 + (0.08 * t);
+            final opacity = 0.35 + (0.65 * t);
+            return AffirmationCard(
+              item: _affirmations[index],
+              opacity: opacity,
+              scale: scale,
+              repaintKey: _boundaryKeys[index],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomActions() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: AffirmationActions(
+            enabled: _affirmations.isNotEmpty,
+            isFavorited: _isCurrentFavorited,
+            onShare: _shareCurrentAffirmation,
+            onFavorite: () {
+              final item = _currentAffirmation;
+              if (item != null) _toggleFavorite(item);
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 24),
+          child: PracticeButton(
+            enabled: _affirmations.isNotEmpty,
+            onPressed: _navigateToSession,
+            onLongPress: _navigateToMicDebug,
+          ),
+        ),
+      ],
+    );
+  }
+}

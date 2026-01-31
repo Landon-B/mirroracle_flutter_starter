@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../core/constants.dart';
+import '../core/logger.dart';
+import '../core/service_locator.dart';
 import '../pages/session_summary_page.dart';
 import '../pages/new_session/session_speech_matcher.dart';
 import '../services/camera_service.dart';
@@ -35,31 +38,31 @@ class SessionController extends ChangeNotifier {
     _speechMatcher.resetForText(_affirmations[_currentAffIdx]);
   }
 
-  // deps
+  // Dependencies
   final CameraService _camera;
   final MicService _mic;
-
   final bool debugMic;
+
+  AppLogger get _log => sl<AppLogger>();
+  SupabaseClient get _supabase => sl<SupabaseClient>();
 
   CameraService get camera => _camera;
   MicService get mic => _mic;
 
-  // camera state
+  // Camera state
   bool _cameraWarmingUp = true;
   bool get cameraWarmingUp => _cameraWarmingUp;
 
   bool get cameraAvailable => _camera.isAvailable;
   bool get cameraReady => _camera.isInitialized;
 
-  // one-shot navigation events
+  // Navigation events
   final _navCtrl = StreamController<SessionNavEvent>.broadcast();
   Stream<SessionNavEvent> get navEvents$ => _navCtrl.stream;
 
-  // session state
+  // Session state
   SessionPhase _phase = SessionPhase.idle;
   SessionPhase get phase => _phase;
-
-  static const int kTargetSeconds = 90;
 
   int _elapsed = 0;
   int get elapsed => _elapsed;
@@ -76,7 +79,6 @@ class SessionController extends ChangeNotifier {
   int _currentAffRep = 0;
   int get currentAffRep => _currentAffRep;
 
-  static const int kRepsPerAffirmation = 3;
   int get repsPerAffirmation => kRepsPerAffirmation;
 
   final SessionSpeechMatcher _speechMatcher = SessionSpeechMatcher();
@@ -106,16 +108,15 @@ class SessionController extends ChangeNotifier {
 
   bool _started = false;
 
-  // ---- ignore tail-end mic results right after switching affirmations ----
+  // Ignore tail-end mic results right after switching affirmations
   DateTime _ignoreMicUntil = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _advanceTimer;
   bool _awaitingNewUtterance = false;
   DateTime _lastMicEventAt = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minGapForNewUtterance = Duration(milliseconds: 700);
 
   bool _shouldIgnoreMicResult() => DateTime.now().isBefore(_ignoreMicUntil);
 
-  void _armMicIgnoreWindow([Duration d = const Duration(milliseconds: 250)]) {
+  void _armMicIgnoreWindow([Duration d = kMicIgnoreWindow]) {
     _ignoreMicUntil = DateTime.now().add(d);
   }
 
@@ -135,9 +136,9 @@ class SessionController extends ChangeNotifier {
     _advanceAffirmation();
   }
 
-  // ---------------------------
+  // ─────────────────────────────────────────────────────────────────────────
   // Favorites (Supabase)
-  // ---------------------------
+  // ─────────────────────────────────────────────────────────────────────────
   final Set<String> _favoriteAffirmationIds = <String>{};
   bool _favoritesLoaded = false;
 
@@ -163,44 +164,54 @@ class SessionController extends ChangeNotifier {
     final cached = _affirmationIdCache[text];
     if (cached != null) return cached;
 
-    final resp = await Supabase.instance.client
-        .from('affirmations')
-        .select('id')
-        .eq('text', text)
-        .limit(1)
-        .maybeSingle();
+    try {
+      final resp = await _supabase
+          .from('affirmations')
+          .select('id')
+          .eq('text', text)
+          .limit(1)
+          .maybeSingle();
 
-    final id = resp?['id'] as String?;
-    if (id != null) _affirmationIdCache[text] = id;
-    return id;
+      final id = resp?['id'] as String?;
+      if (id != null) _affirmationIdCache[text] = id;
+      return id;
+    } catch (e) {
+      _log.db('Failed to get affirmation ID', level: LogLevel.warning, error: e);
+      return null;
+    }
   }
 
   Future<void> _loadFavoritesIfNeeded() async {
     if (_favoritesLoaded) return;
 
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = _supabase.auth.currentUser?.id;
     if (uid == null) {
       _favoritesLoaded = true;
       return;
     }
 
-    final rows = await Supabase.instance.client
-        .from('favorite_affirmations')
-        .select('affirmation_id')
-        .eq('user_id', uid);
+    try {
+      final rows = await _supabase
+          .from('favorite_affirmations')
+          .select('affirmation_id')
+          .eq('user_id', uid);
 
-    _favoriteAffirmationIds
-      ..clear()
-      ..addAll(
-        rows.map((r) => r['affirmation_id'] as String).where((s) => s.isNotEmpty),
-      );
+      _favoriteAffirmationIds
+        ..clear()
+        ..addAll(
+          rows.map((r) => r['affirmation_id'] as String).where((s) => s.isNotEmpty),
+        );
 
-    _favoritesLoaded = true;
-    notifyListeners();
+      _favoritesLoaded = true;
+      notifyListeners();
+    } catch (e) {
+      _log.db('Failed to load favorites', level: LogLevel.warning, error: e);
+      _favoritesLoaded = true;
+    }
   }
 
   Future<void> toggleFavoriteCurrentAffirmation() async {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = _supabase.auth.currentUser?.id;
     if (uid == null) {
       _status = 'Please sign in to favorite affirmations.';
       notifyListeners();
@@ -220,7 +231,7 @@ class SessionController extends ChangeNotifier {
 
     try {
       if (isFav) {
-        await Supabase.instance.client
+        await _supabase
             .from('favorite_affirmations')
             .delete()
             .eq('user_id', uid)
@@ -228,8 +239,7 @@ class SessionController extends ChangeNotifier {
 
         _favoriteAffirmationIds.remove(affId);
       } else {
-        // If you have a unique constraint on (user_id, affirmation_id), this is safe.
-        await Supabase.instance.client.from('favorite_affirmations').upsert(
+        await _supabase.from('favorite_affirmations').upsert(
           {
             'user_id': uid,
             'affirmation_id': affId,
@@ -242,6 +252,7 @@ class SessionController extends ChangeNotifier {
 
       notifyListeners();
     } catch (e) {
+      _log.db('Failed to toggle favorite', level: LogLevel.error, error: e);
       _status = 'Favorite failed: $e';
       notifyListeners();
     }
@@ -257,8 +268,9 @@ class SessionController extends ChangeNotifier {
 
     try {
       await _camera.init();
-    } catch (_) {
-      // camera remains unavailable; session still runs
+    } catch (e) {
+      _log.camera('Camera init failed during session start', level: LogLevel.warning, error: e);
+      // Camera remains unavailable; session still runs
     } finally {
       _cameraWarmingUp = false;
       notifyListeners();
@@ -293,7 +305,7 @@ class SessionController extends ChangeNotifier {
       _elapsed++;
       _presenceSeconds++;
 
-      if (_elapsed >= kTargetSeconds) {
+      if (_elapsed >= kSessionDurationSeconds) {
         finish();
         return;
       }
@@ -312,13 +324,13 @@ class SessionController extends ChangeNotifier {
       if (_shouldIgnoreMicResult()) return;
       final now = DateTime.now();
       if (_awaitingNewUtterance &&
-          now.difference(_lastMicEventAt) < _minGapForNewUtterance) {
+          now.difference(_lastMicEventAt) < kMinGapForNewUtterance) {
         _lastMicEventAt = now;
         return;
       }
       _awaitingNewUtterance = false;
 
-      if (debugMic) debugPrint('[mic][partial] $text');
+      if (debugMic) _log.mic('Partial: $text');
 
       final spokenTokens = _speechMatcher.tokenizeSpeechForCurrent(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
@@ -332,13 +344,13 @@ class SessionController extends ChangeNotifier {
       if (_shouldIgnoreMicResult()) return;
       final now = DateTime.now();
       if (_awaitingNewUtterance &&
-          now.difference(_lastMicEventAt) < _minGapForNewUtterance) {
+          now.difference(_lastMicEventAt) < kMinGapForNewUtterance) {
         _lastMicEventAt = now;
         return;
       }
       _awaitingNewUtterance = false;
 
-      if (debugMic) debugPrint('[mic][final] $text');
+      if (debugMic) _log.mic('Final: $text');
 
       final spokenTokens = _speechMatcher.tokenizeSpeechForCurrent(text);
       final changed = _speechMatcher.updateWithSpokenTokens(spokenTokens);
@@ -350,13 +362,13 @@ class SessionController extends ChangeNotifier {
 
     _errSub = _mic.errors$.listen((err) {
       if (_phase != SessionPhase.live) return;
-      if (debugMic) debugPrint('[mic][error] $err');
+      if (debugMic) _log.mic('Error in session', level: LogLevel.warning, error: err);
       _restartListeningSoon();
     });
 
     _stateSub = _mic.state$.listen((s) {
       if (_phase != SessionPhase.live) return;
-      if (debugMic) debugPrint('[mic][state] $s');
+      if (debugMic) _log.mic('State: $s');
 
       notifyListeners();
 
@@ -368,7 +380,7 @@ class SessionController extends ChangeNotifier {
 
   Future<void> _ensureMicReadyAndListen() async {
     final ok = await _mic.init(debugLogging: false);
-    debugPrint('[mic][init] ok=$ok');
+    _log.mic('Init result: $ok');
     if (!ok) {
       _micNeedsRestart = true;
       notifyListeners();
@@ -386,7 +398,7 @@ class SessionController extends ChangeNotifier {
     _micNeedsRestart = false;
     notifyListeners();
 
-    _listenTimeoutTimer = Timer(const Duration(minutes: 10), () {
+    _listenTimeoutTimer = Timer(kMicListenDuration, () {
       if (_phase != SessionPhase.live) return;
       _listenTimedOut = true;
       _micNeedsRestart = true;
@@ -400,13 +412,13 @@ class SessionController extends ChangeNotifier {
           localeId: 'en_US',
           partialResults: true,
           cancelOnError: false,
-          listenFor: const Duration(minutes: 10),
-          pauseFor: const Duration(seconds: 6),
+          listenFor: kMicListenDuration,
+          pauseFor: kMicPauseDuration,
           keepAlive: true,
         );
       }
     } catch (e) {
-      if (debugMic) debugPrint('[mic][listen start failed] $e');
+      _log.mic('Listen start failed', level: LogLevel.error, error: e);
       _micNeedsRestart = true;
       notifyListeners();
     }
@@ -419,7 +431,7 @@ class SessionController extends ChangeNotifier {
   }
 
   void _restartListeningSoon() {
-    Future.delayed(const Duration(milliseconds: 300), () {
+    Future.delayed(kMicRestartDelay, () {
       if (_phase != SessionPhase.live) return;
       if (!_mic.isListening && !_micNeedsRestart) {
         _listen();
@@ -465,7 +477,7 @@ class SessionController extends ChangeNotifier {
     if (_phase != SessionPhase.live) return;
     // Hard reset STT so partials from the previous affirmation don't carry over.
     _mic.stop();
-    Future.delayed(const Duration(milliseconds: 250), () {
+    Future.delayed(kMicRestartDelay, () {
       if (_phase != SessionPhase.live) return;
       _listen();
     });
@@ -487,7 +499,7 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final uid = _supabase.auth.currentUser?.id;
       if (uid == null) throw Exception('No user session');
 
       final endedAt = DateTime.now().toUtc();
@@ -509,7 +521,7 @@ class SessionController extends ChangeNotifier {
         'completed': true,
       };
 
-      await Supabase.instance.client.from('sessions').insert(payload);
+      await _supabase.from('sessions').insert(payload);
 
       _status =
           'Session saved • ${duration}s • presence ${(presenceScore * 100).toStringAsFixed(0)}%';
@@ -528,6 +540,7 @@ class SessionController extends ChangeNotifier {
         ),
       );
     } catch (e) {
+      _log.db('Session save failed', level: LogLevel.error, error: e);
       _status = 'Save failed: $e';
       _setPhase(SessionPhase.done);
       notifyListeners();

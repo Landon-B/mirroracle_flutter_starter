@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'secrets.dart';
+
+import 'core/constants.dart';
+import 'core/service_locator.dart';
 import 'pages/auth_landing_page.dart';
 import 'pages/home_page.dart';
 import 'pages/onboarding_page.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'services/camera_service.dart';
+import 'secrets.dart';
+import 'services/camera_ready_notifier.dart';
 
-const bool kForceOnboardingEveryLaunch = false; // TESTING ONLY
-
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
   runApp(const MirroracleApp());
 }
 
@@ -24,14 +27,17 @@ class MirroracleApp extends StatelessWidget {
     await SystemChrome.setPreferredOrientations(
       [DeviceOrientation.portraitUp],
     );
+
     await Supabase.initialize(
-      url: SUPABASE_URL,
-      anonKey: SUPABASE_ANON_KEY,
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey,
       authOptions: const FlutterAuthClientOptions(
-        authFlowType: AuthFlowType.pkce, // fine to keep for email/password too
-        // autoRefreshToken is true by default in flutter package
+        authFlowType: AuthFlowType.pkce,
       ),
-    ).timeout(const Duration(seconds: 12));
+    ).timeout(kSupabaseInitTimeout);
+
+    // Initialize service locator after Supabase is ready
+    await setupServiceLocator();
   }
 
   @override
@@ -39,7 +45,7 @@ class MirroracleApp extends StatelessWidget {
     return MaterialApp(
       title: 'Mirroracle',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Color(0xFF7C4DFF)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF7C4DFF)),
         useMaterial3: true,
       ),
       home: FutureBuilder<void>(
@@ -48,10 +54,24 @@ class MirroracleApp extends StatelessWidget {
           if (snapshot.hasError) {
             return Scaffold(
               body: Center(
-                child: Text(
-                  'Startup failed. Check Supabase config.',
-                  style: Theme.of(context).textTheme.bodyLarge,
-                  textAlign: TextAlign.center,
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Startup failed',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Please check your network connection and try again.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -82,7 +102,9 @@ class _AuthGateState extends State<AuthGate> {
   Future<bool>? _onboardingFuture;
   String? _onboardingUserId;
   bool _forcedOnboardingShown = false;
-  bool _cameraWarmed = false;
+  bool _cameraWarmStarted = false;
+
+  CameraReadyNotifier get _cameraNotifier => sl<CameraReadyNotifier>();
 
   @override
   void initState() {
@@ -90,26 +112,19 @@ class _AuthGateState extends State<AuthGate> {
     _authStream = Supabase.instance.client.auth.onAuthStateChange;
   }
 
-  Future<void> _warmUpCamera() async {
-    try {
-      final camera = CameraService();
-      final granted = await camera.ensureCameraPermission();
-      if (!granted) return;
-      await camera.warmUp();
-    } catch (_) {}
-  }
+  /// Start camera warm-up in the background without blocking UI.
+  void _startCameraWarmUp() {
+    if (_cameraWarmStarted) return;
+    _cameraWarmStarted = true;
 
-  void _tryWarmCamera() {
-    if (_cameraWarmed) return;
-    _cameraWarmed = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _warmUpCamera();
+    // Use microtask to avoid blocking the current frame
+    Future.microtask(() {
+      _cameraNotifier.warmUp();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // Keep the listener mounted at all times so signIn/signOut rebuilds the UI.
     return StreamBuilder<AuthState>(
       stream: _authStream,
       builder: (context, snapshot) {
@@ -123,7 +138,7 @@ class _AuthGateState extends State<AuthGate> {
           return const AuthLandingPage();
         }
 
-        _tryWarmCamera();
+        _startCameraWarmUp();
 
         if (kForceOnboardingEveryLaunch) {
           if (_forcedOnboardingShown) {

@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/service_locator.dart';
 import '../../services/camera_service.dart';
 
 class SessionCameraPreview extends StatelessWidget {
@@ -11,7 +12,7 @@ class SessionCameraPreview extends StatelessWidget {
     required this.controller,
     required this.initFuture,
     required this.warmingUp,
-    this.cameraScale = 1.08,     // slight zoom-in to match Snapchat-style crop
+    this.cameraScale = 1.08, // slight zoom-in to match Snapchat-style crop
   });
 
   final CameraController? controller;
@@ -24,7 +25,7 @@ class SessionCameraPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (controller == null || initFuture == null) {
-      return Container(color: Colors.black);
+      return const _WarmupView(message: 'Preparing camera…');
     }
 
     return FutureBuilder<void>(
@@ -38,12 +39,6 @@ class SessionCameraPreview extends StatelessWidget {
         final value = controller!.value;
         final previewSize = value.previewSize;
 
-        // Camera plugin reports size in *landscape* (width > height)
-        // We want a portrait aspect ratio for the sensor itself.
-        final double sensorAspectPortrait = (previewSize != null && previewSize.width > 0)
-            ? previewSize.height / previewSize.width
-            : 4 / 3; // sane default
-
         final bool isFrontCamera =
             controller!.description.lensDirection == CameraLensDirection.front;
 
@@ -53,7 +48,7 @@ class SessionCameraPreview extends StatelessWidget {
         if (isFrontCamera) {
           camera = Transform(
             alignment: Alignment.center,
-            transform: Matrix4.identity()..scale(-1.0, 1.0, 1.0),
+            transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
             child: camera,
           );
         }
@@ -66,7 +61,7 @@ class SessionCameraPreview extends StatelessWidget {
                 onTapDown: (details) {
                   final dx = details.localPosition.dx / constraints.maxWidth;
                   final dy = details.localPosition.dy / constraints.maxHeight;
-                  CameraService().tapToFocus(Offset(dx, dy));
+                  sl<CameraService>().tapToFocus(Offset(dx, dy));
                 },
                 child: ClipRect(
                   child: FittedBox(
@@ -87,27 +82,21 @@ class SessionCameraPreview extends StatelessWidget {
         return Stack(
           fit: StackFit.expand,
           children: [
+            // Camera preview with smooth fade and blur transition
             AnimatedOpacity(
-              duration: const Duration(milliseconds: 450),
+              duration: const Duration(milliseconds: 400),
               curve: Curves.easeOutCubic,
               opacity: showLive ? 1 : 0,
-              child: TweenAnimationBuilder<double>(
-                tween: Tween<double>(begin: 8, end: showLive ? 0 : 8),
-                duration: const Duration(milliseconds: 500),
-                curve: Curves.easeOutCubic,
-                builder: (context, sigma, child) {
-                  return ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-                    child: child,
-                  );
-                },
+              child: _BlurTransition(
+                isBlurred: !showLive,
                 child: preview,
               ),
             ),
-            if (!showLive) const _WarmupView(),
-            // Optional "camera warming up" overlay even after init completes
+            // Warmup view (underneath the camera)
+            if (!showLive) const _WarmupView(message: 'Warming up camera…'),
+            // Optional "camera warming up" overlay pill
             AnimatedSwitcher(
-              duration: const Duration(milliseconds: 250),
+              duration: const Duration(milliseconds: 200),
               child: warmingUp ? const _WarmupOverlay() : const SizedBox.shrink(),
             ),
           ],
@@ -117,8 +106,39 @@ class SessionCameraPreview extends StatelessWidget {
   }
 }
 
+/// Smoothly transitions blur on/off for the camera preview.
+class _BlurTransition extends StatelessWidget {
+  const _BlurTransition({
+    required this.isBlurred,
+    required this.child,
+  });
+
+  final bool isBlurred;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 8, end: isBlurred ? 8 : 0),
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+      builder: (context, sigma, child) {
+        // Skip blur filter when sigma is effectively 0 for performance
+        if (sigma < 0.5) return child!;
+        return ImageFiltered(
+          imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+          child: child,
+        );
+      },
+      child: child,
+    );
+  }
+}
+
 class _WarmupView extends StatefulWidget {
-  const _WarmupView();
+  const _WarmupView({this.message = 'Warming up camera…'});
+
+  final String message;
 
   @override
   State<_WarmupView> createState() => _WarmupViewState();
@@ -142,15 +162,17 @@ class _WarmupViewState extends State<_WarmupView>
       color: Colors.black,
       child: Center(
         child: FadeTransition(
-          opacity: Tween<double>(begin: 0.45, end: 1.0).animate(_c),
-          child: const Column(
+          opacity: Tween<double>(begin: 0.45, end: 1.0).animate(
+            CurvedAnimation(parent: _c, curve: Curves.easeInOut),
+          ),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.photo_camera_front_rounded, color: Colors.white70, size: 36),
-              SizedBox(height: 12),
+              const Icon(Icons.photo_camera_front_rounded, color: Colors.white70, size: 36),
+              const SizedBox(height: 12),
               Text(
-                'Warming up camera…',
-                style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                widget.message,
+                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -175,9 +197,23 @@ class _WarmupOverlay extends StatelessWidget {
             color: Colors.black54,
             borderRadius: BorderRadius.circular(14),
           ),
-          child: const Text(
-            'Optimizing camera…',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white70,
+                ),
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Optimizing camera…',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              ),
+            ],
           ),
         ),
       ),

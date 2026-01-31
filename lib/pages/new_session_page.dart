@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../controllers/session_controller.dart';
+import '../core/service_locator.dart';
+import '../services/camera_ready_notifier.dart';
 import '../services/camera_service.dart';
 import '../services/mic_service.dart';
 
@@ -30,12 +32,15 @@ class _NewSessionPageState extends State<NewSessionPage>
   // Wrap the whole screen so captures can include camera + overlay if needed.
   final GlobalKey _captureKey = GlobalKey();
 
+  CameraReadyNotifier get _cameraNotifier => sl<CameraReadyNotifier>();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    _cameraService = CameraService();
+    // Use the singleton camera service (may already be warmed up)
+    _cameraService = sl<CameraService>();
     _micService = MicService();
 
     _controller = SessionController(
@@ -55,7 +60,17 @@ class _NewSessionPageState extends State<NewSessionPage>
       }
     });
 
+    // Listen for camera ready state changes
+    _cameraNotifier.addListener(_onCameraStateChanged);
+
     _controller.initAndStart();
+  }
+
+  void _onCameraStateChanged() {
+    // Trigger rebuild when camera state changes
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -71,12 +86,13 @@ class _NewSessionPageState extends State<NewSessionPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _navSub?.cancel();
+    _cameraNotifier.removeListener(_onCameraStateChanged);
 
     WakelockPlus.disable();
 
     _controller.dispose();
     _micService.dispose();
-    _cameraService.dispose();
+    // Don't dispose the camera service - it's a singleton that persists
 
     super.dispose();
   }
@@ -150,6 +166,10 @@ class _NewSessionPageState extends State<NewSessionPage>
         final currentText =
             affs.isNotEmpty ? affs[_controller.currentAffIdx] : '';
 
+        // Use both controller state and global notifier for smooth transitions
+        final cameraReady = _controller.cameraReady && !_controller.cameraWarmingUp;
+        final cameraWarming = _controller.cameraWarmingUp || _cameraNotifier.isWarming;
+
         return Scaffold(
           body: RepaintBoundary(
             key: _captureKey,
@@ -159,10 +179,14 @@ class _NewSessionPageState extends State<NewSessionPage>
                 SessionCameraPreview(
                   controller: _cameraService.controller,
                   initFuture: _cameraService.initFuture,
-                  warmingUp: _controller.cameraWarmingUp,
+                  warmingUp: cameraWarming,
                 ),
-                if (_controller.cameraReady && !_controller.cameraWarmingUp)
-                  SessionOverlay(
+                // Show overlay once camera is ready OR after warming completes
+                // This prevents blank screens if camera fails
+                AnimatedOpacity(
+                  duration: const Duration(milliseconds: 300),
+                  opacity: (cameraReady || !cameraWarming) ? 1.0 : 0.0,
+                  child: SessionOverlay(
                     showLiveHud: showLiveHud,
                     showSaving: showSaving,
                     currentAffIdx: _controller.currentAffIdx,
@@ -177,11 +201,10 @@ class _NewSessionPageState extends State<NewSessionPage>
                     onMicTap: _controller.onMicTap,
                     onClose: _abortSession,
                     statusText: _controller.status,
-
-                    // ✅ requires the small SessionOverlay patch below
                     onFavorite: _toggleFavorite,
                     isFavorited: _controller.isCurrentAffirmationFavorited,
                   ),
+                ),
               ],
             ),
           ),
